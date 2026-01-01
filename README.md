@@ -35,6 +35,7 @@ The project implements core object-oriented programming concepts:
 
 ## 📂 Project Structure
 
+```
 OOP_BASE/
 ├── README.md
 ├── requirements.txt
@@ -46,3 +47,4 @@ OOP_BASE/
 │   └── test_main.py  
 └── docs/
     └── algorithm.md
+```
