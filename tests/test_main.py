@@ -20,6 +20,12 @@ from main import (
     AccountClosedError,
     InvalidOperationError,
     TransactionLogger,
+    InvestmentAccount,
+    PremiumAccount,
+    SavingsAccount,
+    Stock,
+    ETF,
+    Bond,
 )
 
 
@@ -295,7 +301,400 @@ class TestBankAccount(unittest.TestCase):
         # Логирование не должно произойти
         self.assertEqual(len(mock_logger.deposits), 0)
         self.assertEqual(len(mock_logger.withdrawals), 0)
+""""""
+# ============ Тесты для SavingsAccount ============
+class TestSavingsAccount(unittest.TestCase):
+    """Тесты для класса SavingsAccount"""
 
+    def test_apply_monthly_interest_success(self):
+        """Тест успешного начисления процентов"""
+        mock_logger = MockLogger()
+        account = SavingsAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            monthly_interest_rate=0.05,
+            balance=10000,
+            min_balance=1000,
+            logger=mock_logger,
+        )
+        
+        initial_balance = account.balance
+        account.apply_monthly_interest()
+        expected_balance = initial_balance * 1.05
+        
+        self.assertEqual(account.balance, expected_balance)
+
+    def test_withdraw_below_min_balance(self):
+        """Тест снятия, нарушающего минимальный остаток"""
+        mock_logger = MockLogger()
+        account = SavingsAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            monthly_interest_rate=0.03,
+            balance=5000,
+            min_balance=1000,
+            logger=mock_logger,
+        )
+        
+        with self.assertRaises(InsufficientFundsError):
+            account.withdraw(4500)
+
+    def test_withdraw_respecting_min_balance(self):
+        """Тест снятия с учетом минимального остатка"""
+        mock_logger = MockLogger()
+        account = SavingsAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            monthly_interest_rate=0.03,
+            balance=5000,
+            min_balance=1000,
+            logger=mock_logger,
+        )
+        
+        account.withdraw(4000)
+        self.assertEqual(account.balance, 1000)
+
+    def test_interest_on_frozen_account(self):
+        """Тест начисления процентов на замороженный счёт"""
+        mock_logger = MockLogger()
+        account = SavingsAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            monthly_interest_rate=0.05,
+            balance=10000,
+            min_balance=1000,
+            status=AccountStatus.FROZEN,
+            logger=mock_logger,
+        )
+        
+        with self.assertRaises(AccountFrozenError):
+            account.apply_monthly_interest()
+
+    def test_negative_min_balance_init(self):
+        """Тест создания счёта с отрицательным минимальным остатком"""
+        mock_logger = MockLogger()
+        
+        with self.assertRaises(InsufficientFundsError):
+            SavingsAccount(
+                first_last_name="Test User",
+                account_type=AccountType.INDIVIDUAL,
+                currency=Currency.RUB,
+                monthly_interest_rate=0.03,
+                balance=5000,
+                min_balance=-1000,
+                logger=mock_logger,
+            )
+
+    def test_get_account_info_savings(self):
+        """Тест получения информации о сберегательном счёте"""
+        mock_logger = MockLogger()
+        account = SavingsAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            monthly_interest_rate=0.05,
+            balance=10000,
+            min_balance=1000,
+            logger=mock_logger,
+        )
+        
+        info = account.get_account_info()
+        
+        self.assertEqual(info["account_subtype"], "Savings")
+        self.assertEqual(info["min_balance"], 1000)
+        self.assertIn("monthly_interest_rate", info)
+
+
+# ============ Тесты для PremiumAccount ============
+class TestPremiumAccount(unittest.TestCase):
+    """Тесты для класса PremiumAccount"""
+
+    def test_withdraw_with_overdraft(self):
+        """Тест снятия с использованием овердрафта"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        account.withdraw(3000)
+        expected_balance = 1000 - 3000 - 50  # balance - withdrawal - fee
+        self.assertEqual(account.balance, expected_balance)
+
+    def test_withdraw_exceeding_overdraft_limit(self):
+        """Тест снятия, превышающего лимит овердрафта"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        with self.assertRaises(InsufficientFundsError):
+            account.withdraw(7000)
+
+    def test_fee_charged_once_in_overdraft(self):
+        """Тест начисления комиссии только один раз при овердрафте"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        account.withdraw(1500)  # Первый овердрафт
+        balance_after_first = account.balance
+        
+        account.withdraw(500)  # Второй овердрафт
+        balance_after_second = account.balance
+        
+        # Комиссия должна быть списана только один раз
+        self.assertEqual(balance_after_second, balance_after_first - 500)
+
+    def test_fee_reset_after_positive_balance(self):
+        """Тест сброса флага комиссии после выхода из овердрафта"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        account.withdraw(1500)  # Овердрафт с комиссией
+        account.deposit(2000)  # Возврат к положительному балансу
+        
+        self.assertFalse(account.fee_charged)
+
+    def test_deposit_in_overdraft(self):
+        """Тест пополнения счёта в овердрафте"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        account.withdraw(2000)  # Баланс: -1050
+        account.deposit(3000)   # Баланс: 1950
+        
+        self.assertEqual(account.balance, 1950)
+        self.assertFalse(account.fee_charged)
+
+    def test_get_account_info_premium(self):
+        """Тест получения информации о премиум счёте"""
+        mock_logger = MockLogger()
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            overdraft_limit=5000,
+            fixed_fee=50,
+            logger=mock_logger,
+        )
+        
+        info = account.get_account_info()
+        
+        self.assertEqual(info["account_subtype"], "Premium")
+        self.assertEqual(info["overdraft_limit"], 5000)
+        self.assertEqual(info["available_balance"], 6000)
+
+
+# ============ Тесты для InvestmentAccount ============
+class TestInvestmentAccount(unittest.TestCase):
+    """Тесты для класса InvestmentAccount"""
+
+    def test_add_asset_success(self):
+        """Тест успешного добавления актива"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=10000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        stock = Stock("AAPL", 10, 150)
+        account.add_asset(stock)
+        
+        self.assertEqual(len(account.portfolio), 1)
+        self.assertEqual(account.balance, 10000 - 1500)
+
+    def test_add_asset_insufficient_funds(self):
+        """Тест добавления актива при недостаточных средствах"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=1000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        stock = Stock("AAPL", 10, 150)
+        
+        with self.assertRaises(InsufficientFundsError):
+            account.add_asset(stock)
+
+    def test_get_portfolio_value(self):
+        """Тест расчёта стоимости портфеля"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=50000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        account.add_asset(Stock("AAPL", 10, 150))   # 1500
+        account.add_asset(Bond("US10Y", 5, 1000))   # 5000
+        account.add_asset(ETF("SPY", 20, 400))      # 8000
+        
+        expected_portfolio_value = 1500 + 5000 + 8000
+        self.assertEqual(account.get_portfolio_value(), expected_portfolio_value)
+
+    def test_get_total_value(self):
+        """Тест расчёта общей стоимости счёта"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=50000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        account.add_asset(Stock("AAPL", 10, 150))
+        
+        expected_total = (50000 - 1500) + 1500
+        self.assertEqual(account.get_total_value(), expected_total)
+
+    def test_project_yearly_growth(self):
+        """Тест прогноза годового роста"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=10000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        projection = account.project_yearly_growth(years=3)
+        
+        self.assertIn("current_value", projection)
+        self.assertIn("projections", projection)
+        self.assertEqual(len(projection["projections"]), 3)
+        
+        # Проверка расчёта для первого года
+        expected_year_1 = round(10000 * 1.10, 2)
+        self.assertEqual(projection["projections"]["year_1"], expected_year_1)
+
+    def test_withdraw_only_free_cash(self):
+        """Тест снятия только из свободных средств"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=10000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        account.add_asset(Stock("AAPL", 10, 150))
+        
+        with self.assertRaises(InsufficientFundsError):
+            account.withdraw(9000)
+
+    def test_withdraw_free_cash_available(self):
+        """Тест снятия доступных свободных средств"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=10000,
+            expected_annual_return=0.10,
+            logger=mock_logger,
+        )
+        
+        account.add_asset(Stock("AAPL", 10, 150))
+        account.withdraw(5000)
+        
+        expected_balance = 10000 - 1500 - 5000
+        self.assertEqual(account.balance, expected_balance)
+
+    def test_add_asset_frozen_account(self):
+        """Тест добавления актива на замороженный счёт"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=10000,
+            expected_annual_return=0.10,
+            status=AccountStatus.FROZEN,
+            logger=mock_logger,
+        )
+        
+        stock = Stock("AAPL", 10, 150)
+        
+        with self.assertRaises(AccountFrozenError):
+            account.add_asset(stock)
+
+    def test_get_account_info_investment(self):
+        """Тест получения информации об инвестиционном счёте"""
+        mock_logger = MockLogger()
+        account = InvestmentAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.USD,
+            balance=50000,
+            expected_annual_return=0.12,
+            logger=mock_logger,
+        )
+        
+        account.add_asset(Stock("AAPL", 10, 150))
+        
+        info = account.get_account_info()
+        
+        self.assertEqual(info["account_subtype"], "Investment")
+        self.assertIn("portfolio_value", info)
+        self.assertIn("total_value", info)
+        self.assertEqual(info["assets_count"], 1)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
