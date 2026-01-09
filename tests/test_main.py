@@ -26,6 +26,8 @@ from main import (
     Stock,
     ETF,
     Bond,
+    Bank,
+    Client
 )
 
 
@@ -301,7 +303,11 @@ class TestBankAccount(unittest.TestCase):
         # Логирование не должно произойти
         self.assertEqual(len(mock_logger.deposits), 0)
         self.assertEqual(len(mock_logger.withdrawals), 0)
+
+
 """"""
+
+
 # ============ Тесты для SavingsAccount ============
 class TestSavingsAccount(unittest.TestCase):
     """Тесты для класса SavingsAccount"""
@@ -318,11 +324,11 @@ class TestSavingsAccount(unittest.TestCase):
             min_balance=1000,
             logger=mock_logger,
         )
-        
+
         initial_balance = account.balance
         account.apply_monthly_interest()
         expected_balance = initial_balance * 1.05
-        
+
         self.assertEqual(account.balance, expected_balance)
 
     def test_withdraw_below_min_balance(self):
@@ -337,7 +343,7 @@ class TestSavingsAccount(unittest.TestCase):
             min_balance=1000,
             logger=mock_logger,
         )
-        
+
         with self.assertRaises(InsufficientFundsError):
             account.withdraw(4500)
 
@@ -353,7 +359,7 @@ class TestSavingsAccount(unittest.TestCase):
             min_balance=1000,
             logger=mock_logger,
         )
-        
+
         account.withdraw(4000)
         self.assertEqual(account.balance, 1000)
 
@@ -370,14 +376,14 @@ class TestSavingsAccount(unittest.TestCase):
             status=AccountStatus.FROZEN,
             logger=mock_logger,
         )
-        
+
         with self.assertRaises(AccountFrozenError):
             account.apply_monthly_interest()
 
     def test_negative_min_balance_init(self):
         """Тест создания счёта с отрицательным минимальным остатком"""
         mock_logger = MockLogger()
-        
+
         with self.assertRaises(InsufficientFundsError):
             SavingsAccount(
                 first_last_name="Test User",
@@ -401,9 +407,9 @@ class TestSavingsAccount(unittest.TestCase):
             min_balance=1000,
             logger=mock_logger,
         )
-        
+
         info = account.get_account_info()
-        
+
         self.assertEqual(info["account_subtype"], "Savings")
         self.assertEqual(info["min_balance"], 1000)
         self.assertIn("monthly_interest_rate", info)
@@ -425,7 +431,7 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         account.withdraw(3000)
         expected_balance = 1000 - 3000 - 50  # balance - withdrawal - fee
         self.assertEqual(account.balance, expected_balance)
@@ -442,7 +448,7 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         with self.assertRaises(InsufficientFundsError):
             account.withdraw(7000)
 
@@ -458,13 +464,13 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         account.withdraw(1500)  # Первый овердрафт
         balance_after_first = account.balance
-        
+
         account.withdraw(500)  # Второй овердрафт
         balance_after_second = account.balance
-        
+
         # Комиссия должна быть списана только один раз
         self.assertEqual(balance_after_second, balance_after_first - 500)
 
@@ -480,10 +486,10 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         account.withdraw(1500)  # Овердрафт с комиссией
         account.deposit(2000)  # Возврат к положительному балансу
-        
+
         self.assertFalse(account.fee_charged)
 
     def test_deposit_in_overdraft(self):
@@ -498,10 +504,10 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         account.withdraw(2000)  # Баланс: -1050
-        account.deposit(3000)   # Баланс: 1950
-        
+        account.deposit(3000)  # Баланс: 1950
+
         self.assertEqual(account.balance, 1950)
         self.assertFalse(account.fee_charged)
 
@@ -517,9 +523,9 @@ class TestPremiumAccount(unittest.TestCase):
             fixed_fee=50,
             logger=mock_logger,
         )
-        
+
         info = account.get_account_info()
-        
+
         self.assertEqual(info["account_subtype"], "Premium")
         self.assertEqual(info["overdraft_limit"], 5000)
         self.assertEqual(info["available_balance"], 6000)
@@ -540,10 +546,10 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         stock = Stock("AAPL", 10, 150)
         account.add_asset(stock)
-        
+
         self.assertEqual(len(account.portfolio), 1)
         self.assertEqual(account.balance, 10000 - 1500)
 
@@ -558,9 +564,9 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         stock = Stock("AAPL", 10, 150)
-        
+
         with self.assertRaises(InsufficientFundsError):
             account.add_asset(stock)
 
@@ -575,11 +581,11 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
-        account.add_asset(Stock("AAPL", 10, 150))   # 1500
-        account.add_asset(Bond("US10Y", 5, 1000))   # 5000
-        account.add_asset(ETF("SPY", 20, 400))      # 8000
-        
+
+        account.add_asset(Stock("AAPL", 10, 150))  # 1500
+        account.add_asset(Bond("US10Y", 5, 1000))  # 5000
+        account.add_asset(ETF("SPY", 20, 400))  # 8000
+
         expected_portfolio_value = 1500 + 5000 + 8000
         self.assertEqual(account.get_portfolio_value(), expected_portfolio_value)
 
@@ -594,9 +600,9 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         account.add_asset(Stock("AAPL", 10, 150))
-        
+
         expected_total = (50000 - 1500) + 1500
         self.assertEqual(account.get_total_value(), expected_total)
 
@@ -611,13 +617,13 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         projection = account.project_yearly_growth(years=3)
-        
+
         self.assertIn("current_value", projection)
         self.assertIn("projections", projection)
         self.assertEqual(len(projection["projections"]), 3)
-        
+
         # Проверка расчёта для первого года
         expected_year_1 = round(10000 * 1.10, 2)
         self.assertEqual(projection["projections"]["year_1"], expected_year_1)
@@ -633,9 +639,9 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         account.add_asset(Stock("AAPL", 10, 150))
-        
+
         with self.assertRaises(InsufficientFundsError):
             account.withdraw(9000)
 
@@ -650,10 +656,10 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.10,
             logger=mock_logger,
         )
-        
+
         account.add_asset(Stock("AAPL", 10, 150))
         account.withdraw(5000)
-        
+
         expected_balance = 10000 - 1500 - 5000
         self.assertEqual(account.balance, expected_balance)
 
@@ -669,9 +675,9 @@ class TestInvestmentAccount(unittest.TestCase):
             status=AccountStatus.FROZEN,
             logger=mock_logger,
         )
-        
+
         stock = Stock("AAPL", 10, 150)
-        
+
         with self.assertRaises(AccountFrozenError):
             account.add_asset(stock)
 
@@ -686,15 +692,161 @@ class TestInvestmentAccount(unittest.TestCase):
             expected_annual_return=0.12,
             logger=mock_logger,
         )
-        
+
         account.add_asset(Stock("AAPL", 10, 150))
-        
+
         info = account.get_account_info()
-        
+
         self.assertEqual(info["account_subtype"], "Investment")
         self.assertIn("portfolio_value", info)
         self.assertIn("total_value", info)
         self.assertEqual(info["assets_count"], 1)
+
+def test_bank_add_client_success(self):
+    """Тест успешного добавления клиента"""
+    client = Client(
+        client_id="FL001",
+        full_name="Иван Иванов",
+        birth_date="1990-05-15"
+    )
+    
+    bank = Bank()
+    bank.add_client(client)
+    
+    self.assertIn("FL001", bank.clients)
+    self.assertEqual(bank.clients["FL001"].full_name, "Иван Иванов")
+
+
+def test_bank_add_client_duplicate(self):
+    """Тест добавления дублирующегося клиента"""
+    client = Client("FL001", "Иван Иванов", "1990-05-15")
+    
+    bank = Bank()
+    bank.add_client(client)
+    
+    with self.assertRaises(InvalidOperationError):
+        bank.add_client(client)  # Должен упасть
+
+
+def test_bank_client_age_validation(self):
+    """Тест валидации возраста клиента"""
+    with self.assertRaises(InvalidOperationError):
+        Client("UL999", "Младенец", "2025-01-01")  # <18 лет
+
+
+def test_bank_open_account_success(self):
+    """Тест открытия счёта с успешной аутентификацией"""
+    client = Client("FL001", "Иван Иванов", "1990-05-15")
+    bank = Bank()
+    bank.add_client(client)
+    
+    acc_uuid = bank.open_account(
+        client_id="FL001",
+        account_type=BankAccount,
+        currency=Currency.RUB,
+        balance=10000
+    )
+    
+    self.assertIn(acc_uuid, bank.accounts)
+    self.assertEqual(bank.accounts[acc_uuid].balance, 10000)
+    self.assertIn(acc_uuid, client.accounts)
+
+
+def test_bank_open_account_auth_fail(self):
+    """Тест отказа в открытии счёта из-за аутентификации"""
+    client = Client("FL001", "Иван Иванов", "1990-05-15")
+    bank = Bank()
+    bank.add_client(client)
+    
+    with self.assertRaises(AccountClosedError):
+        bank.open_account("fake_id", BankAccount, Currency.RUB)
+
+
+def test_bank_three_failed_attempts(self):
+    """Тест блокировки после 3 неудачных попыток"""
+    bank = Bank()
+    
+    # 3 неудачные попытки
+    for _ in range(3):
+        try:
+            bank.open_account("fake_id", BankAccount, Currency.RUB)
+        except AccountClosedError:
+            pass
+    
+    # 4-я попытка должна быть заблокирована
+    with self.assertRaises(AccountClosedError):
+        bank.open_account("fake_id", BankAccount, Currency.RUB)
+
+
+def test_bank_freeze_unfreeze_account(self):
+    """Тест заморозки/разморозки счёта"""
+    client = Client("FL001", "Иван Иванов", "1990-05-15")
+    bank = Bank()
+    bank.add_client(client)
+    
+    acc_uuid = bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
+    account = bank.accounts[acc_uuid]
+    
+    # Заморозка
+    bank.freeze_account(acc_uuid, "admin")
+    self.assertEqual(account.status, AccountStatus.FROZEN)
+    
+    # Разморозка
+    bank.unfreeze_account(acc_uuid, "admin")
+    self.assertEqual(account.status, AccountStatus.ACTIVE)
+
+
+def test_bank_search_accounts(self):
+    """Тест поиска счетов клиента"""
+    client = Client("FL001", "Иван Иванов", "1990-05-15")
+    bank = Bank()
+    bank.add_client(client)
+    
+    acc1 = bank.open_account("FL001", SavingsAccount, Currency.RUB, balance=5000, monthly_interest_rate=0.01)
+    acc2 = bank.open_account("FL001", PremiumAccount, Currency.USD, balance=10000, overdraft_limit=2000)
+    
+    accounts_info = bank.search_accounts("FL001")
+    
+    self.assertEqual(len(accounts_info), 2)
+    self.assertEqual(accounts_info[0]["balance"], 5000)
+    self.assertEqual(accounts_info[1]["balance"], 10000)
+
+
+def test_bank_total_balance(self):
+    """Тест подсчёта общего баланса банка"""
+    client1 = Client("FL001", "Иван Иванов", "1990-05-15")
+    client2 = Client("UL002", "ООО Альфа", "2010-01-01")
+    
+    bank = Bank()
+    bank.add_client(client1)
+    bank.add_client(client2)
+    
+    bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
+    bank.open_account("UL002", BankAccount, Currency.RUB, balance=5000)
+    
+    self.assertEqual(bank.get_total_balance(), 15000)  # Только ACTIVE
+
+
+def test_bank_clients_ranking(self):
+    """Тест ранжирования клиентов по балансу"""
+    client1 = Client("FL001", "Иван Иванов", "1990-05-15")
+    client2 = Client("UL002", "ООО Альфа", "2015-01-01")
+    
+    bank = Bank()
+    bank.add_client(client1)
+    bank.add_client(client2)
+    
+    bank.open_account("FL001", BankAccount, Currency.RUB, balance=20000)
+    bank.open_account("UL002", BankAccount, Currency.RUB, balance=10000)
+    
+    ranking = bank.get_clients_ranking(2)
+    
+    self.assertEqual(ranking[0]["client"], "Иван Иванов")
+    self.assertEqual(ranking[0]["total"], 20000)
+    self.assertEqual(ranking[1]["client"], "ООО Альфа")
+    self.assertEqual(ranking[1]["total"], 10000)
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
