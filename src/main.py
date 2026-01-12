@@ -2,8 +2,11 @@ from abc import ABC, abstractmethod
 import uuid
 from enum import Enum
 from typing import Protocol
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
+import heapq
+from typing import Optional, Callable
+from dataclasses import dataclass, field
 
 
 # ============ Enums ============
@@ -640,6 +643,12 @@ class Client(BankAccount):
 
         self._validate_age()
 
+    def add_account(self, account_uuid: str) -> None:  # ← ДОБАВЬ ЭТОТ МЕТОД
+        """Добавить UUID счёта к списку счетов клиента"""
+        if self.status != AccountStatus.ACTIVE:
+            raise AccountFrozenError("Cannot add accounts to inactive client")
+        self.accounts.append(account_uuid)
+
     def _validate_age(self) -> None:
         birth = datetime.strptime(self.birth_date, "%Y-%m-%d")
         age = datetime.now().year - birth.year
@@ -741,3 +750,410 @@ class Bank:
             )
             ranking.append({"client": client.full_name, "total": total})
         return sorted(ranking, key=lambda x: x["total"], reverse=True)[:top_n]
+
+
+class TransactionType(Enum):
+    DEPOSIT = "deposit"
+    WITHDRAWAL = "withdrawal"
+    TRANSFER = "transfer"
+    EXTERNAL_TRANSFER = "external_transfer"
+
+
+class TransactionStatus(Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TransactionPriority(Enum):
+    LOW = 3
+    NORMAL = 2
+    HIGH = 1
+    URGENT = 0
+
+
+@dataclass
+class Transaction:
+    """Модель транзакции с полной историей"""
+
+    transaction_id: str
+    transaction_type: TransactionType
+    amount: float
+    currency: Currency
+    sender_account_id: Optional[str] = None
+    receiver_account_id: Optional[str] = None
+    fee: float = 0.0
+    status: TransactionStatus = TransactionStatus.PENDING
+    failure_reason: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    processed_at: Optional[datetime] = None
+    priority: TransactionPriority = TransactionPriority.NORMAL
+
+    def mark_completed(self) -> None:
+        """Отметить транзакцию как успешную"""
+        self.status = TransactionStatus.COMPLETED
+        self.processed_at = datetime.now()
+
+    def mark_failed(self, reason: str) -> None:
+        """Отметить транзакцию как неудачную"""
+        self.status = TransactionStatus.FAILED
+        self.failure_reason = reason
+        self.processed_at = datetime.now()
+
+    def mark_cancelled(self) -> None:
+        """Отменить транзакцию"""
+        if self.status == TransactionStatus.PENDING:
+            self.status = TransactionStatus.CANCELLED
+            self.processed_at = datetime.now()
+        else:
+            raise InvalidOperationError("Cannot cancel non-pending transaction")
+
+    def get_total_amount(self) -> float:
+        """Сумма с комиссией"""
+        return self.amount + self.fee
+
+    def __lt__(self, other):
+        """Сравнение для приоритетной очереди"""
+        if self.priority.value != other.priority.value:
+            return self.priority.value < other.priority.value
+        return self.created_at < other.created_at
+
+
+class TransactionQueue:
+    """Очередь транзакций с приоритетами и отложенным выполнением"""
+
+    def __init__(self):
+        self._queue: list[tuple] = []  # heap: (priority, timestamp, transaction)
+        self._scheduled: list[tuple] = []  # (execute_at, transaction)
+        self._transactions: dict[str, Transaction] = {}
+
+    def add_transaction(self, transaction: Transaction, delay_seconds: int = 0) -> None:
+        """Добавить транзакцию в очередь"""
+        self._transactions[transaction.transaction_id] = transaction
+
+        if delay_seconds > 0:
+            execute_at = datetime.now() + timedelta(seconds=delay_seconds)
+            self._scheduled.append((execute_at, transaction))
+            print(
+                f"⏳ Транзакция {transaction.transaction_id} отложена до {execute_at.strftime('%H:%M:%S')}"
+            )
+        else:
+            heapq.heappush(
+                self._queue,
+                (transaction.priority.value, transaction.created_at, transaction),
+            )
+            print(
+                f"➕ Транзакция {transaction.transaction_id} добавлена с приоритетом {transaction.priority.name}"
+            )
+
+    def get_next_transaction(self) -> Optional[Transaction]:
+        """Получить следующую транзакцию из очереди"""
+        # Проверяем отложенные транзакции
+        self._process_scheduled()
+
+        if not self._queue:
+            return None
+
+        _, _, transaction = heapq.heappop(self._queue)
+        transaction.status = TransactionStatus.PROCESSING
+        return transaction
+
+    def _process_scheduled(self) -> None:
+        """Переместить готовые отложенные транзакции в основную очередь"""
+        now = datetime.now()
+        ready = []
+        still_scheduled = []
+
+        for execute_at, transaction in self._scheduled:
+            if execute_at <= now:
+                ready.append(transaction)
+            else:
+                still_scheduled.append((execute_at, transaction))
+
+        self._scheduled = still_scheduled
+
+        for transaction in ready:
+            heapq.heappush(
+                self._queue,
+                (transaction.priority.value, transaction.created_at, transaction),
+            )
+            print(
+                f"⏰ Отложенная транзакция {transaction.transaction_id} готова к выполнению"
+            )
+
+    def cancel_transaction(self, transaction_id: str) -> bool:
+        """Отменить транзакцию"""
+        if transaction_id not in self._transactions:
+            return False
+
+        transaction = self._transactions[transaction_id]
+
+        try:
+            transaction.mark_cancelled()
+            # Удаляем из очереди (помечаем как отменённую)
+            return True
+        except InvalidOperationError:
+            return False
+
+    def get_pending_count(self) -> int:
+        """Количество ожидающих транзакций"""
+        return len(self._queue) + len(self._scheduled)
+
+    def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
+        """Получить транзакцию по ID"""
+        return self._transactions.get(transaction_id)
+
+
+# ============ Currency Converter ============
+class CurrencyConverter:
+    """Конвертер валют с курсами"""
+
+    # Упрощённые курсы относительно RUB
+    RATES = {
+        Currency.RUB: 1.0,
+        Currency.USD: 95.0,
+        Currency.EUR: 105.0,
+        Currency.KZT: 0.21,
+        Currency.CNY: 13.5,
+    }
+
+    @classmethod
+    def convert(
+        cls, amount: float, from_currency: Currency, to_currency: Currency
+    ) -> float:
+        """Конвертация между валютами"""
+        if from_currency == to_currency:
+            return amount
+
+        # Конвертируем через RUB
+        amount_in_rub = amount * cls.RATES[from_currency]
+        result = amount_in_rub / cls.RATES[to_currency]
+        return round(result, 2)
+
+    @classmethod
+    def get_rate(cls, from_currency: Currency, to_currency: Currency) -> float:
+        """Получить курс конвертации"""
+        return cls.RATES[from_currency] / cls.RATES[to_currency]
+
+
+# ============ Fee Calculator ============
+class FeeCalculator:
+    """Калькулятор комиссий"""
+
+    INTERNAL_TRANSFER_FEE = 0.0  # Бесплатно
+    EXTERNAL_TRANSFER_FEE_PERCENT = 0.015  # 1.5%
+    EXTERNAL_TRANSFER_MIN_FEE = 50.0  # Минимум 50 RUB
+    CURRENCY_CONVERSION_FEE_PERCENT = 0.01  # 1%
+
+    @classmethod
+    def calculate_fee(
+        cls,
+        transaction_type: TransactionType,
+        amount: float,
+        currency: Currency,
+        currency_conversion: bool = False,
+    ) -> float:
+        """Расчёт комиссии"""
+        fee = 0.0
+
+        if transaction_type == TransactionType.EXTERNAL_TRANSFER:
+            fee = max(
+                amount * cls.EXTERNAL_TRANSFER_FEE_PERCENT,
+                cls.EXTERNAL_TRANSFER_MIN_FEE,
+            )
+
+        if currency_conversion:
+            fee += amount * cls.CURRENCY_CONVERSION_FEE_PERCENT
+
+        return round(fee, 2)
+
+
+# ============ Transaction Processor ============
+class TransactionProcessor:
+    """Обработчик транзакций с повторами и логированием"""
+
+    def __init__(self, bank: "Bank", max_retries: int = 3):
+        self.bank = bank
+        self.max_retries = max_retries
+        self.failed_transactions: list[Transaction] = []
+
+    def process_transaction(self, transaction: Transaction) -> bool:
+        """Обработать транзакцию с повторами"""
+        attempts = 0
+
+        while attempts < self.max_retries:
+            try:
+                if transaction.transaction_type == TransactionType.DEPOSIT:
+                    self._process_deposit(transaction)
+                elif transaction.transaction_type == TransactionType.WITHDRAWAL:
+                    self._process_withdrawal(transaction)
+                elif transaction.transaction_type == TransactionType.TRANSFER:
+                    self._process_transfer(transaction)
+                elif transaction.transaction_type == TransactionType.EXTERNAL_TRANSFER:
+                    self._process_external_transfer(transaction)
+
+                transaction.mark_completed()
+                print(f"✅ Транзакция {transaction.transaction_id} выполнена успешно")
+                return True
+
+            except (
+                InsufficientFundsError,
+                AccountFrozenError,
+                AccountClosedError,
+            ) as e:
+                # Критические ошибки — не повторяем
+                transaction.mark_failed(str(e))
+                self.failed_transactions.append(transaction)
+                print(f"❌ Транзакция {transaction.transaction_id} отклонена: {e}")
+                return False
+
+            except Exception as e:
+                attempts += 1
+                if attempts >= self.max_retries:
+                    transaction.mark_failed(f"Max retries exceeded: {e}")
+                    self.failed_transactions.append(transaction)
+                    print(
+                        f"❌ Транзакция {transaction.transaction_id} не выполнена после {attempts} попыток"
+                    )
+                    return False
+                else:
+                    print(
+                        f"⚠️ Попытка {attempts}/{self.max_retries} для транзакции {transaction.transaction_id}"
+                    )
+
+        return False
+
+    def _process_deposit(self, transaction: Transaction) -> None:
+        """Обработать пополнение"""
+        account = self.bank.accounts.get(transaction.receiver_account_id)
+        if not account:
+            raise InvalidOperationError("Account not found")
+
+        account.deposit(transaction.amount)
+
+    def _process_withdrawal(self, transaction: Transaction) -> None:
+        """Обработать снятие"""
+        account = self.bank.accounts.get(transaction.sender_account_id)
+        if not account:
+            raise InvalidOperationError("Account not found")
+
+        AccountStatusValidator.validate_for_operation(account.status)
+        account.withdraw(transaction.get_total_amount())  # С учётом комиссии
+
+    def _process_transfer(self, transaction: Transaction) -> None:
+        """Обработать внутренний перевод"""
+        sender = self.bank.accounts.get(transaction.sender_account_id)
+        receiver = self.bank.accounts.get(transaction.receiver_account_id)
+
+        if not sender or not receiver:
+            raise InvalidOperationError("One or both accounts not found")
+
+        # Проверки
+        AccountStatusValidator.validate_for_operation(sender.status)
+        AccountStatusValidator.validate_for_operation(receiver.status)
+
+        # Проверка баланса (кроме премиум с овердрафтом)
+        if not isinstance(sender, PremiumAccount):
+            if sender.balance < transaction.get_total_amount():
+                raise InsufficientFundsError("Insufficient funds for transfer")
+
+        # Конвертация валюты при необходимости
+        if sender.currency != receiver.currency:
+            converted_amount = CurrencyConverter.convert(
+                transaction.amount, sender.currency, receiver.currency
+            )
+        else:
+            converted_amount = transaction.amount
+
+        # Выполнение перевода
+        sender.withdraw(transaction.get_total_amount())
+        receiver.deposit(converted_amount)
+
+    def _process_external_transfer(self, transaction: Transaction) -> None:
+        """Обработать внешний перевод"""
+        sender = self.bank.accounts.get(transaction.sender_account_id)
+
+        if not sender:
+            raise InvalidOperationError("Sender account not found")
+
+        AccountStatusValidator.validate_for_operation(sender.status)
+
+        # Внешний перевод — только списание
+        total = transaction.get_total_amount()
+        if not isinstance(sender, PremiumAccount):
+            if sender.balance < total:
+                raise InsufficientFundsError("Insufficient funds for external transfer")
+
+        sender.withdraw(total)
+
+    def get_failed_transactions(self) -> list[Transaction]:
+        """Получить список неудачных транзакций"""
+        return self.failed_transactions
+
+
+# ============ Transaction Factory ============
+class TransactionFactory:
+    """Фабрика для создания транзакций"""
+
+    @staticmethod
+    def create_deposit(
+        receiver_account_id: str,
+        amount: float,
+        currency: Currency,
+        priority: TransactionPriority = TransactionPriority.NORMAL,
+    ) -> Transaction:
+        """Создать транзакцию пополнения"""
+        return Transaction(
+            transaction_id=UUIDGenerator.generate()[:8],
+            transaction_type=TransactionType.DEPOSIT,
+            amount=amount,
+            currency=currency,
+            receiver_account_id=receiver_account_id,
+            priority=priority,
+        )
+
+    @staticmethod
+    def create_transfer(
+        sender_account_id: str,
+        receiver_account_id: str,
+        amount: float,
+        currency: Currency,
+        priority: TransactionPriority = TransactionPriority.NORMAL,
+    ) -> Transaction:
+        """Создать транзакцию перевода"""
+        fee = FeeCalculator.calculate_fee(TransactionType.TRANSFER, amount, currency)
+
+        return Transaction(
+            transaction_id=UUIDGenerator.generate()[:8],
+            transaction_type=TransactionType.TRANSFER,
+            amount=amount,
+            currency=currency,
+            sender_account_id=sender_account_id,
+            receiver_account_id=receiver_account_id,
+            fee=fee,
+            priority=priority,
+        )
+
+    @staticmethod
+    def create_external_transfer(
+        sender_account_id: str,
+        amount: float,
+        currency: Currency,
+        priority: TransactionPriority = TransactionPriority.NORMAL,
+    ) -> Transaction:
+        """Создать внешний перевод"""
+        fee = FeeCalculator.calculate_fee(
+            TransactionType.EXTERNAL_TRANSFER, amount, currency
+        )
+
+        return Transaction(
+            transaction_id=UUIDGenerator.generate()[:8],
+            transaction_type=TransactionType.EXTERNAL_TRANSFER,
+            amount=amount,
+            currency=currency,
+            sender_account_id=sender_account_id,
+            fee=fee,
+            priority=priority,
+        )
