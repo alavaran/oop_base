@@ -9,36 +9,67 @@ parent_dir = os.path.dirname(current_dir)
 src_dir = os.path.join(parent_dir, "src")
 sys.path.insert(0, src_dir)
 
+from bank import (
+    Bank
+)
+from client import (
+    Client
+)
+from factory import (
+    TransactionFactory
+)
+from transactions import (
+    Transaction
+)
+from fees import (
+    FeeCalculator
+)
+from processor import (
+    TransactionProcessor
+)
 
-from main import (
-    BankAccount,
+from currency import (
+    CurrencyConverter
+)
+
+from enums import (
     AccountType,
     AccountStatus,
     Currency,
+    TransactionType,
+    TransactionStatus,
+    TransactionPriority
+)
+
+from exceptions import (
     InsufficientFundsError,
     AccountFrozenError,
     AccountClosedError,
     InvalidOperationError,
-    TransactionLogger,
-    InvestmentAccount,
-    PremiumAccount,
-    SavingsAccount,
-    Stock,
-    ETF,
-    Bond,
-    Bank,
-    Client,
-    Transaction,
-    TransactionType,
-    TransactionStatus,
-    TransactionPriority,
-    TransactionQueue,
-    TransactionProcessor,
-    TransactionFactory,
-    CurrencyConverter,
-    FeeCalculator,
 )
 
+from logging import (
+    TransactionLogger,
+    ConsoleLogger,
+    FileLogger
+)
+
+from assets import (
+    Stock,
+    Bond,
+    ETF
+)
+
+from accounts import (
+    BankAccount,
+    InvestmentAccount,
+    PremiumAccount,
+    SavingsAccount
+)
+
+from queue import (
+    TransactionQueue,
+)
 
 class MockLogger(TransactionLogger):
     """Mock-логгер для тестирования"""
@@ -712,149 +743,175 @@ class TestInvestmentAccount(unittest.TestCase):
         self.assertEqual(info["assets_count"], 1)
 
 
-def test_bank_add_client_success(self):
-    """Тест успешного добавления клиента"""
-    client = Client(client_id="FL001", full_name="Иван Иванов", birth_date="1990-05-15")
+    def test_bank_add_client_success(self):
+        """Тест успешного добавления клиента"""
+        client = Client(client_id="FL001", full_name="Иван Иванов", birth_date="1990-05-15")
 
-    bank = Bank()
-    bank.add_client(client)
+        bank = Bank()
+        bank.add_client(client)
 
-    self.assertIn("FL001", bank.clients)
-    self.assertEqual(bank.clients["FL001"].full_name, "Иван Иванов")
-
-
-def test_bank_add_client_duplicate(self):
-    """Тест добавления дублирующегося клиента"""
-    client = Client("FL001", "Иван Иванов", "1990-05-15")
-
-    bank = Bank()
-    bank.add_client(client)
-
-    with self.assertRaises(InvalidOperationError):
-        bank.add_client(client)  # Должен упасть
+        self.assertIn("FL001", bank.clients)
+        self.assertEqual(bank.clients["FL001"].full_name, "Иван Иванов")
 
 
-def test_bank_client_age_validation(self):
-    """Тест валидации возраста клиента"""
-    with self.assertRaises(InvalidOperationError):
-        Client("UL999", "Младенец", "2025-01-01")  # <18 лет
+    def test_bank_add_client_duplicate(self):
+        """Тест добавления дублирующегося клиента"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+
+        bank = Bank()
+        bank.add_client(client)
+
+        with self.assertRaises(InvalidOperationError):
+            bank.add_client(client)  # Должен упасть
 
 
-def test_bank_open_account_success(self):
-    """Тест открытия счёта с успешной аутентификацией"""
-    client = Client("FL001", "Иван Иванов", "1990-05-15")
-    bank = Bank()
-    bank.add_client(client)
-
-    acc_uuid = bank.open_account(
-        client_id="FL001",
-        account_type=BankAccount,
-        currency=Currency.RUB,
-        balance=10000,
-    )
-
-    self.assertIn(acc_uuid, bank.accounts)
-    self.assertEqual(bank.accounts[acc_uuid].balance, 10000)
-    self.assertIn(acc_uuid, client.accounts)
+    def test_bank_client_age_validation(self):
+        """Тест валидации возраста клиента"""
+        with self.assertRaises(InvalidOperationError):
+            Client("FL999", "Младенец", "2025-01-01")  # <18 лет
 
 
-def test_bank_open_account_auth_fail(self):
-    """Тест отказа в открытии счёта из-за аутентификации"""
-    client = Client("FL001", "Иван Иванов", "1990-05-15")
-    bank = Bank()
-    bank.add_client(client)
+    def test_bank_open_account_success(self):
+        """Тест открытия счёта с успешной аутентификацией"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank = Bank()
+        bank.add_client(client)
 
-    with self.assertRaises(AccountClosedError):
-        bank.open_account("fake_id", BankAccount, Currency.RUB)
+        acc_uuid = bank.open_account(
+            client_id="FL001",
+            account_type=BankAccount,
+            currency=Currency.RUB,
+            balance=10000,
+        )
+
+        self.assertIn(acc_uuid, bank.accounts)
+        self.assertEqual(bank.accounts[acc_uuid].balance, 10000)
+        self.assertIn(acc_uuid, client.accounts)
 
 
-def test_bank_three_failed_attempts(self):
-    """Тест блокировки после 3 неудачных попыток"""
-    bank = Bank()
+    def test_bank_open_account_auth_fail(self):
+        """Тест отказа в открытии счёта из-за аутентификации"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank = Bank()
+        bank.add_client(client)
 
-    # 3 неудачные попытки
-    for _ in range(3):
-        try:
+        with self.assertRaises(AccountClosedError):
             bank.open_account("fake_id", BankAccount, Currency.RUB)
-        except AccountClosedError:
-            pass
-
-    # 4-я попытка должна быть заблокирована
-    with self.assertRaises(AccountClosedError):
-        bank.open_account("fake_id", BankAccount, Currency.RUB)
 
 
-def test_bank_freeze_unfreeze_account(self):
-    """Тест заморозки/разморозки счёта"""
-    client = Client("FL001", "Иван Иванов", "1990-05-15")
-    bank = Bank()
-    bank.add_client(client)
+    def test_bank_three_failed_attempts(self):
+        """Тест блокировки после 3 неудачных попыток"""
+        bank = Bank()
 
-    acc_uuid = bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
-    account = bank.accounts[acc_uuid]
+        # 3 неудачные попытки
+        for _ in range(3):
+            try:
+                bank.open_account("fake_id", BankAccount, Currency.RUB)
+            except AccountClosedError:
+                pass
 
-    # Заморозка
-    bank.freeze_account(acc_uuid, "admin")
-    self.assertEqual(account.status, AccountStatus.FROZEN)
-
-    # Разморозка
-    bank.unfreeze_account(acc_uuid, "admin")
-    self.assertEqual(account.status, AccountStatus.ACTIVE)
+        # 4-я попытка должна быть заблокирована
+        with self.assertRaises(AccountClosedError):
+            bank.open_account("fake_id", BankAccount, Currency.RUB)
 
 
-def test_bank_search_accounts(self):
-    """Тест поиска счетов клиента"""
-    client = Client("FL001", "Иван Иванов", "1990-05-15")
-    bank = Bank()
-    bank.add_client(client)
+    def test_bank_freeze_unfreeze_account(self):
+        """Тест заморозки/разморозки счёта"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank = Bank()
+        bank.add_client(client)
 
-    acc1 = bank.open_account(
-        "FL001", SavingsAccount, Currency.RUB, balance=5000, monthly_interest_rate=0.01
-    )
-    acc2 = bank.open_account(
-        "FL001", PremiumAccount, Currency.USD, balance=10000, overdraft_limit=2000
-    )
+        acc_uuid = bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
+        account = bank.accounts[acc_uuid]
 
-    accounts_info = bank.search_accounts("FL001")
+        # Заморозка
+        bank.freeze_account(acc_uuid, "admin")
+        self.assertEqual(account.status, AccountStatus.FROZEN)
 
-    self.assertEqual(len(accounts_info), 2)
-    self.assertEqual(accounts_info[0]["balance"], 5000)
-    self.assertEqual(accounts_info[1]["balance"], 10000)
+        # Разморозка
+        bank.unfreeze_account(acc_uuid, "admin")
+        self.assertEqual(account.status, AccountStatus.ACTIVE)
 
 
-def test_bank_total_balance(self):
-    """Тест подсчёта общего баланса банка"""
-    client1 = Client("FL001", "Иван Иванов", "1990-05-15")
-    client2 = Client("UL002", "ООО Альфа", "2010-01-01")
+    def test_bank_search_accounts(self):
+        """Тест поиска счетов клиента"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank = Bank()
+        bank.add_client(client)
 
-    bank = Bank()
-    bank.add_client(client1)
-    bank.add_client(client2)
+        acc1 = bank.open_account(
+            "FL001", SavingsAccount, Currency.RUB, balance=5000, monthly_interest_rate=0.01
+        )
+        acc2 = bank.open_account(
+            "FL001", PremiumAccount, Currency.USD, balance=10000, overdraft_limit=2000
+        )
 
-    bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
-    bank.open_account("UL002", BankAccount, Currency.RUB, balance=5000)
+        accounts_info = bank.search_accounts("FL001")
 
-    self.assertEqual(bank.get_total_balance(), 15000)  # Только ACTIVE
+        self.assertEqual(len(accounts_info), 2)
+        self.assertEqual(accounts_info[0]["balance"], 5000)
+        self.assertEqual(accounts_info[1]["balance"], 10000)
+
+    def test_bank_open_account_account_type_enum(self):
+        """Проверяем корректный AccountType после открытия счета через Bank"""
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank = Bank()
+        bank.add_client(client)
+
+        acc_uuid = bank.open_account(
+            "FL001",
+            BankAccount,
+            Currency.RUB,
+            balance=10000
+        )
+
+        account = bank.accounts[acc_uuid]
+
+        # Проверяем, что передан именно Enum
+        self.assertIsInstance(account.account_type, AccountType)
+
+        # Проверяем get_account_info()
+        info = account.get_account_info()
+        self.assertEqual(info["type"], "FL")
+
+        # Проверяем __str__()
+        account_string = str(account)
+        self.assertIn("Тип: FL", account_string)
 
 
-def test_bank_clients_ranking(self):
-    """Тест ранжирования клиентов по балансу"""
-    client1 = Client("FL001", "Иван Иванов", "1990-05-15")
-    client2 = Client("UL002", "ООО Альфа", "2015-01-01")
+    def test_bank_total_balance(self):
+        """Тест подсчёта общего баланса банка"""
+        client1 = Client("FL001", "Иван Иванов", "1990-05-15")
+        client2 = Client("UL002", "ООО Альфа", "2010-01-01")
 
-    bank = Bank()
-    bank.add_client(client1)
-    bank.add_client(client2)
+        bank = Bank()
+        bank.add_client(client1)
+        bank.add_client(client2)
 
-    bank.open_account("FL001", BankAccount, Currency.RUB, balance=20000)
-    bank.open_account("UL002", BankAccount, Currency.RUB, balance=10000)
+        bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
+        bank.open_account("UL002", BankAccount, Currency.RUB, balance=5000)
 
-    ranking = bank.get_clients_ranking(2)
+        self.assertEqual(bank.get_total_balance(), 15000)  # Только ACTIVE
 
-    self.assertEqual(ranking[0]["client"], "Иван Иванов")
-    self.assertEqual(ranking[0]["total"], 20000)
-    self.assertEqual(ranking[1]["client"], "ООО Альфа")
-    self.assertEqual(ranking[1]["total"], 10000)
+
+    def test_bank_clients_ranking(self):
+        """Тест ранжирования клиентов по балансу"""
+        client1 = Client("FL001", "Иван Иванов", "1990-05-15")
+        client2 = Client("UL002", "ООО Альфа", "2015-01-01")
+
+        bank = Bank()
+        bank.add_client(client1)
+        bank.add_client(client2)
+
+        bank.open_account("FL001", BankAccount, Currency.RUB, balance=20000)
+        bank.open_account("UL002", BankAccount, Currency.RUB, balance=10000)
+
+        ranking = bank.get_clients_ranking(2)
+
+        self.assertEqual(ranking[0]["client"], "Иван Иванов")
+        self.assertEqual(ranking[0]["total"], 20000)
+        self.assertEqual(ranking[1]["client"], "ООО Альфа")
+        self.assertEqual(ranking[1]["total"], 10000)
 
 
 class TestTransaction(unittest.TestCase):
