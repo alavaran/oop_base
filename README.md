@@ -40,11 +40,26 @@ OOP_BASE/
 ├── README.md
 ├── requirements.txt
 ├── src/
-│   ├── main.py
+│   ├── accounts.py
+│   ├── assets.py
+│   ├── audit.py
+│   ├── bank.py
+│   ├── client.py
+│   ├── currency.py
+│   ├── enums.py
+│   ├── exceptions.py
+│   ├── factory.py
+│   ├── fees.py
+│   ├── logging.py
+│   ├── models.py
+│   ├── processor.py
+│   ├── queue.py
+│   ├── risk.py
+│   ├── transactions.py
 │   ├── utils.py
-│   └── models.py
+│   └── validators.py
 ├── tests/
-│   └── test_main.py  
+│   └── test_main.py
 └── docs/
     └── algorithm.md
 ```
