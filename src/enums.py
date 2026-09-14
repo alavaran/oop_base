@@ -40,3 +40,8 @@ class TransactionPriority(Enum):
     NORMAL = 2
     HIGH = 1
     URGENT = 0
+
+class RiskLevel(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"

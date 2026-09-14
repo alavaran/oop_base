@@ -38,7 +38,8 @@ from enums import (
     Currency,
     TransactionType,
     TransactionStatus,
-    TransactionPriority
+    TransactionPriority,
+    RiskLevel
 )
 
 from exceptions import (
@@ -70,6 +71,9 @@ from accounts import (
 from queue import (
     TransactionQueue,
 )
+from risk import RiskAnalyzer
+from processor import TransactionProcessor
+from audit import AuditLog, AuditEvent
 
 class MockLogger(TransactionLogger):
     """Mock-логгер для тестирования"""
@@ -1231,6 +1235,11 @@ class TestTransactionProcessor(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(tx.status, TransactionStatus.COMPLETED)
         self.assertEqual(bank.accounts[acc_uuid].balance, 1500)
+        self.assertIn("FL001", bank.transaction_history)
+        self.assertEqual(1, len(bank.transaction_history[bank.account_to_client[tx.receiver_account_id]]))
+        self.assertIs(bank.transaction_history["FL001"][0], tx)
+        self.assertEqual(tx.status, TransactionStatus.COMPLETED)
+
 
     def test_process_withdrawal_success(self):
         """Тест успешной обработки снятия"""
@@ -1440,6 +1449,394 @@ class TestTransactionFactory(unittest.TestCase):
         self.assertEqual(tx.transaction_type, TransactionType.EXTERNAL_TRANSFER)
         self.assertGreater(tx.fee, 0)  # Комиссия должна быть начислена
 
+class TestRiskAnalyzer(unittest.TestCase):
+
+    def setUp(self):
+        bank = Bank()
+        client = Client("FL001", "Иван Иванов", "1990-05-15")
+        bank.add_client(client)
+
+        self.acc_uuid = bank.open_account(
+            "FL001",
+            BankAccount,
+            Currency.RUB,
+            balance=10000
+        )
+
+        self.bank = bank
+        self.analyzer = RiskAnalyzer(bank)
+
+    def test_risk_levels(self):
+        # LOW
+        tx = Transaction(
+            transaction_id="TX001",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=1000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+        self.assertEqual(
+            self.analyzer.analyze(tx),
+            RiskLevel.LOW
+        )
+
+        # MEDIUM по сумме
+        tx = Transaction(
+            transaction_id="TX002",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=400_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+        self.assertEqual(
+            self.analyzer.analyze(tx),
+            RiskLevel.MEDIUM
+        )
+
+        # HIGH по сумме
+        tx = Transaction(
+            transaction_id="TX003",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+        self.assertEqual(
+            self.analyzer.analyze(tx),
+            RiskLevel.HIGH
+        )
+
+    def test_high_risk_transaction_is_blocked(self):
+        tx = Transaction(
+            transaction_id="TX_HIGH",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        processor = TransactionProcessor(self.bank)
+
+        result = processor.process_transaction(tx)
+
+        self.assertFalse(result)
+        self.assertEqual(tx.status, TransactionStatus.FAILED)
+        self.assertEqual(
+            tx.failure_reason,
+            "High risk transaction"
+        )
+    def test_audit_log_records_event(self):
+        audit = AuditLog()
+
+        event = AuditEvent(
+            transaction_id="TX001",
+            risk_level=RiskLevel.HIGH,
+            message="High risk transaction"
+        )
+
+        audit.record(event)
+
+        self.assertEqual(len(audit.events), 1)
+        self.assertIs(audit.events[0], event)
+        self.assertEqual(audit.events[0].transaction_id, "TX001")
+        self.assertEqual(audit.events[0].risk_level, RiskLevel.HIGH)
+
+    def test_audit_log_filters_by_risk(self):
+        audit = AuditLog()
+
+        low_event = AuditEvent(
+            transaction_id="TX001",
+            risk_level=RiskLevel.LOW,
+            message="Normal transaction"
+        )
+
+        high_event = AuditEvent(
+            transaction_id="TX002",
+            risk_level=RiskLevel.HIGH,
+            message="High risk transaction"
+        )
+
+        audit.record(low_event)
+        audit.record(high_event)
+
+        high_events = audit.filter_by_risk(RiskLevel.HIGH)
+
+        self.assertEqual(len(high_events), 1)
+        self.assertIs(high_events[0], high_event)
+
+    def test_processor_creates_audit_event(self):
+        processor = TransactionProcessor(self.bank)
+
+        tx = Transaction(
+            transaction_id="TX_AUDIT",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        result = processor.process_transaction(tx)
+
+        self.assertFalse(result)
+        self.assertEqual(len(processor.audit_log.events), 1)
+
+        event = processor.audit_log.events[0]
+
+        self.assertEqual(event.transaction_id, "TX_AUDIT")
+        self.assertEqual(event.risk_level, RiskLevel.HIGH)
+        self.assertEqual(event.message, "Risk level: high")
+
+    def test_audit_log_saves_to_file(self):
+        audit = AuditLog()
+
+        event = AuditEvent(
+            transaction_id="TX_FILE",
+            risk_level=RiskLevel.HIGH,
+            message="High risk transaction"
+        )
+
+        audit.record(event)
+
+        filename = "test_audit.log"
+
+        try:
+            audit.save_to_file(filename)
+
+            self.assertTrue(os.path.exists(filename))
+
+            with open(filename, "r", encoding="utf-8") as file:
+                content = file.read()
+
+            self.assertIn("TX_FILE", content)
+            self.assertIn("high", content)
+            self.assertIn("High risk transaction", content)
+
+        finally:
+            if os.path.exists(filename):
+                os.remove(filename)
+
+    def test_audit_log_error_statistics(self):
+        audit = AuditLog()
+
+        audit.record(
+            AuditEvent(
+                transaction_id="TX001",
+                risk_level=RiskLevel.LOW,
+                message="Transaction failed",
+                failure_reason="Insufficient funds"
+            )
+        )
+
+        audit.record(
+            AuditEvent(
+                transaction_id="TX002",
+                risk_level=RiskLevel.LOW,
+                message="Transaction failed",
+                failure_reason="Insufficient funds"
+            )
+        )
+
+        audit.record(
+            AuditEvent(
+                transaction_id="TX003",
+                risk_level=RiskLevel.HIGH,
+                message="Transaction blocked",
+                failure_reason="High risk transaction"
+            )
+        )
+
+        statistics = audit.error_statistics()
+
+        self.assertEqual(statistics["Insufficient funds"], 2)
+        self.assertEqual(statistics["High risk transaction"], 1)
+        
+    def test_high_risk_error_is_saved_to_audit(self):
+        processor = TransactionProcessor(self.bank)
+
+        tx = Transaction(
+            transaction_id="TX_ERROR",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        processor.process_transaction(tx)
+
+        statistics = processor.audit_log.error_statistics()
+
+        self.assertEqual(
+            statistics["High risk transaction"],
+            1
+        )
+
+    def test_client_risk_profile(self):
+        processor = TransactionProcessor(self.bank)
+
+        tx = Transaction(
+            transaction_id="TX_PROFILE",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        # Записываем транзакцию в историю клиента
+        tx.mark_completed()
+        self.bank.record_transaction(tx)
+
+        risk = self.analyzer.get_client_risk("FL001")
+
+        self.assertEqual(risk, RiskLevel.HIGH)
+
+    def test_client_risk_report(self):
+        tx_low = Transaction(
+            transaction_id="TX_LOW",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=1_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        tx_medium = Transaction(
+            transaction_id="TX_MEDIUM",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=400_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        tx_high = Transaction(
+            transaction_id="TX_HIGH",
+            transaction_type=TransactionType.WITHDRAWAL,
+            amount=700_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid
+        )
+
+        for tx in [tx_low, tx_medium, tx_high]:
+            tx.mark_completed()
+            self.bank.record_transaction(tx)
+
+        report = self.analyzer.get_client_report("FL001")
+
+        self.assertEqual(report["client_id"], "FL001")
+        self.assertEqual(report["total_transactions"], 3)
+        self.assertEqual(report["low_risk_transactions"], 1)
+        self.assertEqual(report["medium_risk_transactions"], 1)
+        self.assertEqual(report["high_risk_transactions"], 1)
+        self.assertEqual(report["risk_level"], RiskLevel.HIGH)
+        self.assertEqual(report["total_amount"], 1_101_000)
+        self.assertEqual(report["successful_transactions"], 3)
+        self.assertEqual(report["failed_transactions"], 0)
+        self.assertEqual(
+            report["suspicious_transactions"],
+            ["TX_HIGH"]
+        )
+
+    def test_audit_suspicious_events(self):
+        audit_log = AuditLog()
+        low_event = AuditEvent(
+            transaction_id="TX_LOW",
+            risk_level=RiskLevel.LOW,
+            message="Risk level: low"
+        )
+
+        medium_event = AuditEvent(
+            transaction_id="TX_MEDIUM",
+            risk_level=RiskLevel.MEDIUM,
+            message="Risk level: medium"
+        )
+
+        high_event = AuditEvent(
+            transaction_id="TX_HIGH",
+            risk_level=RiskLevel.HIGH,
+            message="Risk level: high"
+        )
+
+        audit_log.record(low_event)
+        audit_log.record(medium_event)
+        audit_log.record(high_event)
+
+        suspicious = audit_log.get_suspicious_events()
+
+        self.assertEqual(len(suspicious), 2)
+        self.assertEqual(
+            [event.transaction_id for event in suspicious],
+            ["TX_MEDIUM", "TX_HIGH"]
+        )
+
+    def test_audit_risk_statistics(self):
+        audit_log = AuditLog()
+        audit_log.record(
+            AuditEvent(
+                transaction_id="TX1",
+                risk_level=RiskLevel.LOW,
+                message="Risk level: low"
+            )
+        )
+
+        audit_log.record(
+            AuditEvent(
+                transaction_id="TX2",
+                risk_level=RiskLevel.MEDIUM,
+                message="Risk level: medium"
+            )
+        )
+
+        audit_log.record(
+            AuditEvent(
+                transaction_id="TX3",
+                risk_level=RiskLevel.HIGH,
+                message="Risk level: high"
+            )
+        )
+
+        statistics = audit_log.get_risk_statistics()
+
+        self.assertEqual(statistics["low"], 1)
+        self.assertEqual(statistics["medium"], 1)
+        self.assertEqual(statistics["high"], 1)
+
+    def test_transfer_to_new_account(self):
+        tx = Transaction(
+            transaction_id="TX_NEW_ACCOUNT",
+            transaction_type=TransactionType.TRANSFER,
+            amount=10_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid,
+            receiver_account_id="NEW_ACCOUNT"
+        )
+
+        risk = self.analyzer.analyze(tx)
+
+        self.assertEqual(risk, RiskLevel.MEDIUM)
+
+    def test_transfer_to_known_account(self):
+        previous_tx = Transaction(
+            transaction_id="TX_PREVIOUS",
+            transaction_type=TransactionType.TRANSFER,
+            amount=10_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid,
+            receiver_account_id="KNOWN_ACCOUNT"
+        )
+
+        previous_tx.mark_completed()
+        self.bank.record_transaction(previous_tx)
+
+        tx = Transaction(
+            transaction_id="TX_NEW",    
+            transaction_type=TransactionType.TRANSFER,
+            amount=10_000,
+            currency=Currency.RUB,
+            sender_account_id=self.acc_uuid,
+            receiver_account_id="KNOWN_ACCOUNT"
+        )
+
+        risk = self.analyzer.analyze(tx)
+
+        self.assertEqual(risk, RiskLevel.LOW)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

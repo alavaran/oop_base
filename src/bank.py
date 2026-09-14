@@ -26,6 +26,13 @@ from exceptions import (
     AccountClosedError,
     InvalidOperationError,
 )
+from enums import (
+    Currency,
+    TransactionType,
+    TransactionStatus,
+    TransactionPriority,
+)
+from transactions import Transaction
 
 class Bank:
     def __init__(self, logger: TransactionLogger = None):
@@ -34,6 +41,8 @@ class Bank:
         self.failed_attempts: dict[str, int] = {}  # client_id -> count
         self.suspicious_actions: set[str] = set()  # client_ids
         self._logger = logger or ConsoleLogger()
+        self.transaction_history: dict[str, list[Transaction]] = {}
+        self.account_to_client: dict[str, str] = {}
 
     def add_client(self, client: Client) -> None:
         if client.client_id in self.clients:
@@ -79,6 +88,7 @@ class Bank:
         account_uuid = account.account_uuid
         self.accounts[account_uuid] = account
         client.add_account(account_uuid)
+        self.account_to_client[account_uuid] = client_id
         return account_uuid
 
     def close_account(self, account_uuid: str, client_id: str) -> None:
@@ -124,3 +134,15 @@ class Bank:
             ranking.append({"client": client.full_name, "total": total})
         return sorted(ranking, key=lambda x: x["total"], reverse=True)[:top_n]
 
+    def record_transaction(self, transaction: Transaction) -> None:
+        
+        if transaction.transaction_type == TransactionType.DEPOSIT: 
+            account_id = transaction.receiver_account_id
+        else:
+            account_id = transaction.sender_account_id
+        client_id = self.account_to_client[account_id]
+
+        if client_id not in self.transaction_history:
+            self.transaction_history[client_id] = []
+
+        self.transaction_history[client_id].append(transaction)
