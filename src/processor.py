@@ -6,7 +6,8 @@ from bank import (
     Bank
 )
 from enums import (
-    TransactionType
+    TransactionType,
+    RiskLevel
 )
 from currency import (
     CurrencyConverter
@@ -23,6 +24,8 @@ from exceptions import (
 from validators import (
     AccountStatusValidator
 )
+from risk import RiskAnalyzer
+from audit import AuditLog, AuditEvent
 # ============ Transaction Processor ============
 class TransactionProcessor:
     """Обработчик транзакций с повторами и логированием"""
@@ -30,10 +33,30 @@ class TransactionProcessor:
     def __init__(self, bank: "Bank", max_retries: int = 3):
         self.bank = bank
         self.max_retries = max_retries
-        self.failed_transactions: list[Transaction] = []
+        self.failed_transactions = []
+        self.risk_analyzer = RiskAnalyzer(bank)
+        self.audit_log = AuditLog()
 
     def process_transaction(self, transaction: Transaction) -> bool:
-        """Обработать транзакцию с повторами"""
+        if transaction.transaction_type == TransactionType.DEPOSIT:
+            risk_level = RiskLevel.LOW
+        else:
+            risk_level = self.risk_analyzer.analyze(transaction)
+
+        if risk_level == RiskLevel.HIGH:
+            transaction.mark_failed("High risk transaction")
+
+            self.audit_log.record(
+                AuditEvent(
+                    transaction_id=transaction.transaction_id,
+                    risk_level=risk_level,
+                    message=f"Risk level: {risk_level.value}",
+                    failure_reason=transaction.failure_reason
+                )
+            )
+
+            return False
+
         attempts = 0
 
         while attempts < self.max_retries:
@@ -46,8 +69,8 @@ class TransactionProcessor:
                     self._process_transfer(transaction)
                 elif transaction.transaction_type == TransactionType.EXTERNAL_TRANSFER:
                     self._process_external_transfer(transaction)
-
                 transaction.mark_completed()
+                self.bank.record_transaction(transaction)
                 print(f"✅ Транзакция {transaction.transaction_id} выполнена успешно")
                 return True
 
