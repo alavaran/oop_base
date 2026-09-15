@@ -9,7 +9,7 @@ from enums import (
     AccountStatus
 )
 
-from logging import (
+from app_logging import (
     TransactionLogger,
     ConsoleLogger,
     FileLogger

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-import logging
+import app_logging
 
 # ============ Logger Interface (Dependency Inversion) ============
 class TransactionLogger(ABC):
@@ -29,10 +29,10 @@ class FileLogger(TransactionLogger):
     """Логирование в файл"""
 
     def __init__(self, filename: str = "transactions.log"):
-        self.logger = logging.getLogger(__name__)
+        self.logger = app_logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        handler = logging.FileHandler(filename)
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        handler = app_logging.FileHandler(filename)
+        formatter = app_logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 

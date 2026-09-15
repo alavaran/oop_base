@@ -49,7 +49,7 @@ from exceptions import (
     InvalidOperationError,
 )
 
-from logging import (
+from app_logging import (
     TransactionLogger,
     ConsoleLogger,
     FileLogger

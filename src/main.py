@@ -7,7 +7,7 @@ from enums import Currency, TransactionType, TransactionStatus
 from transactions import Transaction
 from queue import TransactionQueue
 from processor import TransactionProcessor
-
+from reports import ReportBuilder
 
 def create_demo_bank() -> Bank:
     """Создать демонстрационный банк с клиентами и счетами."""
@@ -247,20 +247,14 @@ def main() -> None:
             f"{item['total']:.2f} RUB"
         )
 
-    transactions = create_demo_transactions(account_ids)
 
     all_transactions = [
-        deposit,
-        transfer,
-        withdrawal,
-        suspicious_transfer,
-        *transactions,
+    deposit,
+    transfer,
+    withdrawal,
+    suspicious_transfer,
+    *transactions,
     ]
-
-    for transaction in transactions:
-        queue.add_transaction(transaction)
-
-    process_queue(queue, processor)
 
     print("\n=== TRANSACTION STATISTICS ===")
     total = len(all_transactions)
@@ -284,6 +278,21 @@ def main() -> None:
     total_balance = bank.get_total_balance()
 
     print(f"Total balance: {total_balance:.2f} RUB")
+
+    report_builder = ReportBuilder(bank)
+
+    report_builder.export_bank_report_json("bank_report.json")
+    report_builder.export_clients_csv("clients_report.csv")
+
+    report_builder.export_risk_report_json(
+        processor.audit_log,
+        "risk_report.json"
+    )
+
+    report_builder.save_charts(
+    all_transactions,
+    processor.audit_log
+    )
         
 if __name__ == "__main__":
     main()

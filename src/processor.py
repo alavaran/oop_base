@@ -38,66 +38,102 @@ class TransactionProcessor:
         self.audit_log = AuditLog()
 
     def process_transaction(self, transaction: Transaction) -> bool:
+        # 1. Определяем уровень риска
         if transaction.transaction_type == TransactionType.DEPOSIT:
             risk_level = RiskLevel.LOW
         else:
             risk_level = self.risk_analyzer.analyze(transaction)
 
+        # 2. Если риск HIGH — сразу отклоняем транзакцию
         if risk_level == RiskLevel.HIGH:
             transaction.mark_failed("High risk transaction")
 
-            self.audit_log.record(
-                AuditEvent(
-                    transaction_id=transaction.transaction_id,
-                    risk_level=risk_level,
-                    message=f"Risk level: {risk_level.value}",
-                    failure_reason=transaction.failure_reason
-                )
+        # 3. Записываем ОДНО audit-событие для каждой транзакции
+        self.audit_log.record(
+            AuditEvent(
+                transaction_id=transaction.transaction_id,
+                risk_level=risk_level,
+                message=f"Risk level: {risk_level.value}",
+                failure_reason=transaction.failure_reason
             )
+        )
 
+        print(
+        f"AUDIT: {transaction.transaction_id} | "
+        f"{risk_level.value}"
+        )
+
+        # 4. HIGH-транзакции дальше не обрабатываем
+        if risk_level == RiskLevel.HIGH:
             return False
 
+        # 5. Пытаемся выполнить транзакцию
         attempts = 0
 
         while attempts < self.max_retries:
             try:
                 if transaction.transaction_type == TransactionType.DEPOSIT:
                     self._process_deposit(transaction)
+
                 elif transaction.transaction_type == TransactionType.WITHDRAWAL:
                     self._process_withdrawal(transaction)
+
                 elif transaction.transaction_type == TransactionType.TRANSFER:
                     self._process_transfer(transaction)
+
                 elif transaction.transaction_type == TransactionType.EXTERNAL_TRANSFER:
                     self._process_external_transfer(transaction)
+
+                # 6. Успешное завершение
                 transaction.mark_completed()
                 self.bank.record_transaction(transaction)
-                print(f"✅ Транзакция {transaction.transaction_id} выполнена успешно")
+
+                print(
+                    f"✅ Транзакция {transaction.transaction_id} "
+                    f"выполнена успешно"
+                )
+
                 return True
 
+            # 7. Ожидаемые ошибки — повторять не нужно
             except (
                 InsufficientFundsError,
                 AccountFrozenError,
                 AccountClosedError,
             ) as e:
-                # Критические ошибки — не повторяем
+
                 transaction.mark_failed(str(e))
                 self.failed_transactions.append(transaction)
-                print(f"❌ Транзакция {transaction.transaction_id} отклонена: {e}")
+
+                print(
+                    f"❌ Транзакция {transaction.transaction_id} "
+                    f"отклонена: {e}"
+                )
+
                 return False
 
+            # 8. Неожидаемые ошибки — пробуем повторить
             except Exception as e:
                 attempts += 1
+
                 if attempts >= self.max_retries:
-                    transaction.mark_failed(f"Max retries exceeded: {e}")
+                    transaction.mark_failed(
+                        f"Max retries exceeded: {e}"
+                    )
+
                     self.failed_transactions.append(transaction)
+
                     print(
-                        f"❌ Транзакция {transaction.transaction_id} не выполнена после {attempts} попыток"
+                        f"❌ Транзакция {transaction.transaction_id} "
+                        f"не выполнена после {attempts} попыток"
                     )
+
                     return False
-                else:
-                    print(
-                        f"⚠️ Попытка {attempts}/{self.max_retries} для транзакции {transaction.transaction_id}"
-                    )
+
+                print(
+                    f"⚠️ Попытка {attempts}/{self.max_retries} "
+                    f"для транзакции {transaction.transaction_id}"
+                )
 
         return False
 
