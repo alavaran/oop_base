@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from exceptions import (
-    InsufficientFundsError
+    InsufficientFundsError,
+    InvalidOperationError
 )
 
 from enums import (
@@ -22,9 +23,12 @@ from validators import (
 )
 
 from assets import (
-    Asset
-)
+    Asset,
+    Stock,
+    Bond,
 
+    ETF
+)
 from utils import (
     UUIDGenerator
 )
@@ -270,21 +274,33 @@ class PremiumAccount(BankAccount):
         AmountValidator.validate(amount)
         AccountStatusValidator.validate_for_operation(self.status)
 
-        if self._balance - amount < -self.overdraft_limit:
+        was_positive = self._balance >= 0
+        will_go_negative = self._balance - amount < 0
+
+        # Комиссия начисляется только при первом уходе в овердрафт
+        fee = 0
+        if was_positive and will_go_negative and not self._fee_charged:
+            fee = self.fixed_fee
+
+        total_amount = amount + fee
+
+        # Проверяем лимит с учетом комиссии
+        if self._balance - total_amount < -self.overdraft_limit:
             raise InsufficientFundsError(
                 f"Withdrawal exceeds overdraft limit of {self.overdraft_limit}"
             )
 
-        was_positive = self._balance >= 0
+        # Выполняем списание
         self._balance -= amount
-        is_negative = self._balance < 0
 
-        # Начисляем комиссию при ПЕРВОМ уходе в овердрафт
-        if was_positive and is_negative and not self._fee_charged:
-            self._balance -= self.fixed_fee
+        # Начисляем комиссию за первый уход в овердрафт
+        if fee > 0:
+            self._balance -= fee
             self._fee_charged = True
+
             print(
-                f"💳 Начислена комиссия за овердрафт: {self.fixed_fee} {self.currency.value}"
+                f"💳 Начислена комиссия за овердрафт: "
+                f"{self.fixed_fee} {self.currency.value}"
             )
 
         self._logger.log_withdrawal(amount, self._balance)
@@ -360,7 +376,14 @@ class InvestmentAccount(BankAccount):
         """Добавление актива в портфель"""
         AccountStatusValidator.validate_for_operation(self.status)
 
+        if not isinstance(asset, (Stock, Bond, ETF)):
+            raise InvalidOperationError("Unsupported asset type")
+
         cost = asset.get_value()
+
+        if cost <= 0:
+            raise InvalidOperationError("Asset value must be positive")
+
         if self._balance < cost:
             raise InsufficientFundsError(
                 f"Insufficient funds to buy asset. Need: {cost}"
@@ -368,6 +391,7 @@ class InvestmentAccount(BankAccount):
 
         self._balance -= cost
         self.portfolio.append(asset)
+
         print(f"📊 Куплен актив: {asset}")
         print(f"💰 Потрачено: {cost:.2f} {self.currency.value}")
 
@@ -379,21 +403,40 @@ class InvestmentAccount(BankAccount):
         """Общая стоимость счета (баланс + портфель)"""
         return self._balance + self.get_portfolio_value()
 
-    def project_yearly_growth(self, years: int = 1) -> dict:
-        """Прогноз роста на N лет"""
-        current_value = self.get_total_value()
-        projected_values = {}
+    def project_yearly_growth(self, growth_rates: dict[str, float]) -> dict:
+        """Прогноз роста портфеля по типам активов."""
 
-        for year in range(1, years + 1):
-            projected_value = current_value * (
-                (1 + self.expected_annual_return) ** year
-            )
-            projected_values[f"year_{year}"] = round(projected_value, 2)
+        current_value = self.get_total_value()
+
+        asset_values = {
+            "stocks": 0,
+            "bonds": 0,
+            "etf": 0,
+        }
+
+        for asset in self.portfolio:
+            if isinstance(asset, Stock):
+                asset_values["stocks"] += asset.get_value()
+            elif isinstance(asset, Bond):
+                asset_values["bonds"] += asset.get_value()
+            elif isinstance(asset, ETF):
+                asset_values["etf"] += asset.get_value()
+
+        required_types = {"stocks", "bonds", "etf"}
+
+        if not required_types.issubset(growth_rates):
+            raise InvalidOperationError(
+                "Growth rates must contain stocks, bonds and etf"
+    )
+        projections = {}
+
+        for asset_type, value in asset_values.items():
+            rate = growth_rates.get(asset_type, 0)
+            projections[asset_type] = round(value * (1 + rate), 2)
 
         return {
             "current_value": round(current_value, 2),
-            "expected_return": f"{self.expected_annual_return * 100}%",
-            "projections": projected_values,
+            "projections": projections,
         }
 
     def withdraw(self, amount: float) -> None:

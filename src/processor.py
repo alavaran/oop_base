@@ -44,30 +44,50 @@ class TransactionProcessor:
         else:
             risk_level = self.risk_analyzer.analyze(transaction)
 
-        # 2. Если риск HIGH — сразу отклоняем транзакцию
+                # Ночные операции запрещены
+        if transaction.created_at.hour < 5:
+            transaction.mark_failed(
+                "Operations forbidden from 00:00 to 05:00"
+            )
+
+            self.bank.record_transaction(transaction)
+            self.failed_transactions.append(transaction)
+
+            self.audit_log.record(
+                AuditEvent(
+                    transaction_id=transaction.transaction_id,
+                    risk_level=risk_level,
+                    message="Night operation rejected",
+                    failure_reason=transaction.failure_reason
+                )
+            )
+
+            return False
+
+        # 2. HIGH risk — сразу отклоняем
         if risk_level == RiskLevel.HIGH:
             transaction.mark_failed("High risk transaction")
 
-        # 3. Записываем ОДНО audit-событие для каждой транзакции
-        self.audit_log.record(
-            AuditEvent(
-                transaction_id=transaction.transaction_id,
-                risk_level=risk_level,
-                message=f"Risk level: {risk_level.value}",
-                failure_reason=transaction.failure_reason
+            self.bank.record_transaction(transaction)
+            self.failed_transactions.append(transaction)
+
+            self.audit_log.record(
+                AuditEvent(
+                    transaction_id=transaction.transaction_id,
+                    risk_level=risk_level,
+                    message=f"Risk level: {risk_level.value}",
+                    failure_reason=transaction.failure_reason
+                )
             )
-        )
 
-        print(
-        f"AUDIT: {transaction.transaction_id} | "
-        f"{risk_level.value}"
-        )
+            print(
+                f"AUDIT: {transaction.transaction_id} | "
+                f"{risk_level.value}"
+            )
 
-        # 4. HIGH-транзакции дальше не обрабатываем
-        if risk_level == RiskLevel.HIGH:
             return False
 
-        # 5. Пытаемся выполнить транзакцию
+        # 3. Пытаемся выполнить транзакцию
         attempts = 0
 
         while attempts < self.max_retries:
@@ -84,7 +104,7 @@ class TransactionProcessor:
                 elif transaction.transaction_type == TransactionType.EXTERNAL_TRANSFER:
                     self._process_external_transfer(transaction)
 
-                # 6. Успешное завершение
+                # 4. Успешное завершение
                 transaction.mark_completed()
                 self.bank.record_transaction(transaction)
 
@@ -95,7 +115,7 @@ class TransactionProcessor:
 
                 return True
 
-            # 7. Ожидаемые ошибки — повторять не нужно
+            # 5. Ожидаемые ошибки — повторять не нужно
             except (
                 InsufficientFundsError,
                 AccountFrozenError,
@@ -103,7 +123,17 @@ class TransactionProcessor:
             ) as e:
 
                 transaction.mark_failed(str(e))
+                self.bank.record_transaction(transaction)
                 self.failed_transactions.append(transaction)
+
+                self.audit_log.record(
+                    AuditEvent(
+                        transaction_id=transaction.transaction_id,
+                        risk_level=risk_level,
+                        message=f"Transaction failed: {e}",
+                        failure_reason=transaction.failure_reason
+                    )
+                )
 
                 print(
                     f"❌ Транзакция {transaction.transaction_id} "
@@ -112,7 +142,7 @@ class TransactionProcessor:
 
                 return False
 
-            # 8. Неожидаемые ошибки — пробуем повторить
+            # 6. Неожиданные ошибки — повторяем
             except Exception as e:
                 attempts += 1
 
@@ -121,7 +151,17 @@ class TransactionProcessor:
                         f"Max retries exceeded: {e}"
                     )
 
+                    self.bank.record_transaction(transaction)
                     self.failed_transactions.append(transaction)
+
+                    self.audit_log.record(
+                        AuditEvent(
+                            transaction_id=transaction.transaction_id,
+                            risk_level=risk_level,
+                            message=f"Transaction failed after retries: {e}",
+                            failure_reason=transaction.failure_reason
+                        )
+                    )
 
                     print(
                         f"❌ Транзакция {transaction.transaction_id} "
@@ -136,7 +176,7 @@ class TransactionProcessor:
                 )
 
         return False
-
+   
     def _process_deposit(self, transaction: Transaction) -> None:
         """Обработать пополнение"""
         account = self.bank.accounts.get(transaction.receiver_account_id)

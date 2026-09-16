@@ -2,7 +2,7 @@ print("Тесты запускаются...")
 import unittest
 import sys
 import os
-
+from datetime import datetime
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -74,6 +74,10 @@ from queue import (
 from risk import RiskAnalyzer
 from processor import TransactionProcessor
 from audit import AuditLog, AuditEvent
+from reports import ReportBuilder
+from currency import CurrencyConverter
+from enums import Currency, TransactionType, TransactionStatus
+from transactions import Transaction
 
 class MockLogger(TransactionLogger):
     """Mock-логгер для тестирования"""
@@ -574,6 +578,33 @@ class TestPremiumAccount(unittest.TestCase):
         self.assertEqual(info["overdraft_limit"], 5000)
         self.assertEqual(info["available_balance"], 6000)
 
+    def test_premium_withdraw_respects_overdraft_limit_with_fee(self):
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            balance=0,
+            overdraft_limit=1000,
+            fixed_fee=50,
+        )
+
+        account.withdraw(950)
+
+        self.assertEqual(account.balance, -1000)
+
+    def test_premium_withdraw_rejects_overdraft_limit_with_fee(self):
+        account = PremiumAccount(
+            first_last_name="Test User",
+            account_type=AccountType.INDIVIDUAL,
+            currency=Currency.RUB,
+            balance=0,
+            overdraft_limit=1000,
+            fixed_fee=50,
+        )
+
+        with self.assertRaises(InsufficientFundsError):
+            account.withdraw(951)
+
 
 # ============ Тесты для InvestmentAccount ============
 class TestInvestmentAccount(unittest.TestCase):
@@ -651,26 +682,66 @@ class TestInvestmentAccount(unittest.TestCase):
         self.assertEqual(account.get_total_value(), expected_total)
 
     def test_project_yearly_growth(self):
-        """Тест прогноза годового роста"""
+        """Тест прогноза годового роста портфеля"""
         mock_logger = MockLogger()
+
         account = InvestmentAccount(
             first_last_name="Test User",
             account_type=AccountType.INDIVIDUAL,
             currency=Currency.USD,
-            balance=10000,
-            expected_annual_return=0.10,
+            balance=20000,
             logger=mock_logger,
         )
 
-        projection = account.project_yearly_growth(years=3)
+        account.add_asset(
+            Stock(
+                symbol="AAPL",
+                quantity=50,
+                price=100
+            )
+        )
+
+        account.add_asset(
+            Bond(
+                symbol="BOND",
+                quantity=50,
+                price=100
+            )
+        )
+
+        account.add_asset(
+            ETF(
+                symbol="ETF",
+                quantity=50,
+                price=100
+            )
+        )
+
+        growth_rates = {
+            "stocks": 0.10,
+            "bonds": 0.04,
+            "etf": 0.07,
+        }
+
+        projection = account.project_yearly_growth(growth_rates)
 
         self.assertIn("current_value", projection)
         self.assertIn("projections", projection)
-        self.assertEqual(len(projection["projections"]), 3)
 
-        # Проверка расчёта для первого года
-        expected_year_1 = round(10000 * 1.10, 2)
-        self.assertEqual(projection["projections"]["year_1"], expected_year_1)
+        self.assertEqual(
+            projection["projections"]["stocks"],
+            5500.00
+        )
+
+        self.assertEqual(
+            projection["projections"]["bonds"],
+            5200.00
+        )
+
+        self.assertEqual(
+            projection["projections"]["etf"],
+            5350.00
+        )
 
     def test_withdraw_only_free_cash(self):
         """Тест снятия только из свободных средств"""
@@ -783,6 +854,7 @@ class TestInvestmentAccount(unittest.TestCase):
 
         acc_uuid = bank.open_account(
             client_id="FL001",
+            pin="1234",
             account_type=BankAccount,
             currency=Currency.RUB,
             balance=10000,
@@ -800,7 +872,7 @@ class TestInvestmentAccount(unittest.TestCase):
         bank.add_client(client)
 
         with self.assertRaises(AccountClosedError):
-            bank.open_account("fake_id", BankAccount, Currency.RUB)
+            bank.open_account("fake_id", "1234", BankAccount, Currency.RUB)
 
 
     def test_bank_three_failed_attempts(self):
@@ -810,13 +882,13 @@ class TestInvestmentAccount(unittest.TestCase):
         # 3 неудачные попытки
         for _ in range(3):
             try:
-                bank.open_account("fake_id", BankAccount, Currency.RUB)
+                bank.open_account("fake_id", "1234", BankAccount, Currency.RUB)
             except AccountClosedError:
                 pass
 
         # 4-я попытка должна быть заблокирована
         with self.assertRaises(AccountClosedError):
-            bank.open_account("fake_id", BankAccount, Currency.RUB)
+            bank.open_account("fake_id", "1234", BankAccount, Currency.RUB)
 
 
     def test_bank_freeze_unfreeze_account(self):
@@ -825,7 +897,7 @@ class TestInvestmentAccount(unittest.TestCase):
         bank = Bank()
         bank.add_client(client)
 
-        acc_uuid = bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
+        acc_uuid = bank.open_account("FL001", "1234", BankAccount, Currency.RUB, balance=10000)
         account = bank.accounts[acc_uuid]
 
         # Заморозка
@@ -844,10 +916,10 @@ class TestInvestmentAccount(unittest.TestCase):
         bank.add_client(client)
 
         acc1 = bank.open_account(
-            "FL001", SavingsAccount, Currency.RUB, balance=5000, monthly_interest_rate=0.01
+            "FL001", "1234", SavingsAccount, Currency.RUB, balance=5000, monthly_interest_rate=0.01
         )
         acc2 = bank.open_account(
-            "FL001", PremiumAccount, Currency.USD, balance=10000, overdraft_limit=2000
+            "FL001", "1234", PremiumAccount, Currency.USD, balance=10000, overdraft_limit=2000
         )
 
         accounts_info = bank.search_accounts("FL001")
@@ -864,6 +936,7 @@ class TestInvestmentAccount(unittest.TestCase):
 
         acc_uuid = bank.open_account(
             "FL001",
+            "1234",
             BankAccount,
             Currency.RUB,
             balance=10000
@@ -892,8 +965,8 @@ class TestInvestmentAccount(unittest.TestCase):
         bank.add_client(client1)
         bank.add_client(client2)
 
-        bank.open_account("FL001", BankAccount, Currency.RUB, balance=10000)
-        bank.open_account("UL002", BankAccount, Currency.RUB, balance=5000)
+        bank.open_account("FL001", "1234", BankAccount, Currency.RUB, balance=10000)
+        bank.open_account("UL002", "1234", BankAccount, Currency.RUB, balance=5000)
 
         self.assertEqual(bank.get_total_balance(), 15000)  # Только ACTIVE
 
@@ -907,8 +980,8 @@ class TestInvestmentAccount(unittest.TestCase):
         bank.add_client(client1)
         bank.add_client(client2)
 
-        bank.open_account("FL001", BankAccount, Currency.RUB, balance=20000)
-        bank.open_account("UL002", BankAccount, Currency.RUB, balance=10000)
+        bank.open_account("FL001", "1234", BankAccount, Currency.RUB, balance=20000)
+        bank.open_account("UL002", "1234", BankAccount, Currency.RUB, balance=10000)
 
         ranking = bank.get_clients_ranking(2)
 
@@ -1218,7 +1291,7 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client)
 
         acc_uuid = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1249,7 +1322,7 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client)
 
         acc_uuid = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1275,7 +1348,7 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client)
 
         acc_uuid = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=500, logger=mock_logger
+            "FL001", "1234",BankAccount, Currency.RUB, balance=500, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1303,10 +1376,10 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client2)
 
         acc1 = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=5000, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=5000, logger=mock_logger
         )
         acc2 = bank.open_account(
-            "FL002", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
+            "FL002", "1234", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1335,10 +1408,10 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client2)
 
         acc1 = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=5000, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=5000, logger=mock_logger
         )
         acc2 = bank.open_account(
-            "FL002", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
+            "FL002", "1234", BankAccount, Currency.RUB, balance=1000, logger=mock_logger
         )
 
         bank.freeze_account(acc1, "admin")
@@ -1366,7 +1439,7 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client)
 
         acc_uuid = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=10000, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=10000, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1392,7 +1465,7 @@ class TestTransactionProcessor(unittest.TestCase):
         bank.add_client(client)
 
         acc_uuid = bank.open_account(
-            "FL001", BankAccount, Currency.RUB, balance=500, logger=mock_logger
+            "FL001", "1234", BankAccount, Currency.RUB, balance=500, logger=mock_logger
         )
 
         processor = TransactionProcessor(bank)
@@ -1409,6 +1482,27 @@ class TestTransactionProcessor(unittest.TestCase):
 
         self.assertEqual(len(failed), 1)
         self.assertEqual(failed[0].transaction_id, "TX001")
+
+    def test_night_deposit_is_rejected(self):
+        bank = Bank()
+        processor = TransactionProcessor(bank)
+
+        transaction = Transaction(
+            transaction_id="NIGHT001",
+            transaction_type=TransactionType.DEPOSIT,
+            amount=1000,
+            currency=Currency.RUB,
+            created_at=datetime(2026, 1, 1, 2, 0)
+        )
+
+        result = processor.process_transaction(transaction)
+
+        self.assertFalse(result)
+        self.assertEqual(transaction.status, TransactionStatus.FAILED)
+        self.assertEqual(
+            transaction.failure_reason,
+            "Operations forbidden from 00:00 to 05:00"
+        )
 
 
 class TestTransactionFactory(unittest.TestCase):
@@ -1458,6 +1552,7 @@ class TestRiskAnalyzer(unittest.TestCase):
 
         self.acc_uuid = bank.open_account(
             "FL001",
+            "1234",
             BankAccount,
             Currency.RUB,
             balance=10000
@@ -1837,6 +1932,109 @@ class TestRiskAnalyzer(unittest.TestCase):
         risk = self.analyzer.analyze(tx)
 
         self.assertEqual(risk, RiskLevel.LOW)
+
+class TestReportBuilder(unittest.TestCase):
+    """Тесты для ReportBuilder"""
+
+    def test_client_report_currency_conversion(self):
+        client = Client(
+            "FL001",
+            "Иван Иванов",
+            "1990-05-15"
+        )
+
+        bank = Bank()
+        bank.add_client(client)
+
+        rub_account = bank.open_account(
+            "FL001",
+            "1234",
+            BankAccount,
+            Currency.RUB,
+            balance=10000
+        )
+
+        usd_account = bank.open_account(
+            "FL001",
+            "1234",
+            BankAccount,
+            Currency.USD,
+            balance=100
+        )
+
+        report_builder = ReportBuilder(bank)
+
+        report = report_builder.generate_client_report("FL001")
+
+        expected_balance = (
+            CurrencyConverter.convert(
+                10000,
+                Currency.RUB,
+                Currency.RUB
+            )
+            +
+            CurrencyConverter.convert(
+                100,
+                Currency.USD,
+                Currency.RUB
+            )
+        )
+
+        self.assertIn("Client ID: FL001", report)
+        self.assertIn("Name: Иван Иванов", report)
+        self.assertIn("Accounts: 2", report)
+        self.assertIn(
+            f"Total balance: {expected_balance:.2f}",
+            report
+        )
+
+    def test_plot_balance_history_currency_conversion(self):
+        bank = Bank()
+
+        transaction = Transaction(
+            transaction_id="T001",
+            transaction_type=TransactionType.DEPOSIT,
+            amount=100,
+            currency=Currency.USD,
+            receiver_account_id=None
+        )
+
+        transaction.mark_completed()
+
+        report_builder = ReportBuilder(bank)
+
+        report_builder.plot_balance_history(
+            [transaction],
+            "test_balance_history.png"
+        )
+
+        self.assertTrue(
+            os.path.exists("test_balance_history.png")
+        )
+
+    def test_plot_balance_history(self):
+        bank = Bank()
+        report_builder = ReportBuilder(bank)
+
+        transaction = Transaction(
+            transaction_id="T001",
+            transaction_type=TransactionType.DEPOSIT,
+            amount=100,
+            currency=Currency.USD
+        )
+
+        transaction.mark_completed()
+
+        filename = "test_balance_history.png"
+
+        report_builder.plot_balance_history(
+            [transaction],
+            filename
+        )
+
+        self.assertTrue(os.path.exists(filename))
+
+        os.remove(filename)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

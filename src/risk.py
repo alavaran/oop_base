@@ -9,7 +9,15 @@ class RiskAnalyzer:
 
     def analyze(self, transaction: Transaction) -> RiskLevel:
         account_id = transaction.sender_account_id
-        client_id = self.bank.account_to_client[account_id]
+
+        if account_id is None:
+            return RiskLevel.LOW
+
+        client_id = self.bank.account_to_client.get(account_id)
+
+        if client_id is None:
+            return RiskLevel.LOW
+
         history = self.bank.transaction_history.get(client_id, [])
 
         recent_operations = []
@@ -23,10 +31,16 @@ class RiskAnalyzer:
         if transaction.amount > 600_000:
             return RiskLevel.HIGH
 
-        elif transaction.created_at.hour < 5:
+        if transaction.created_at.hour < 5:
             return RiskLevel.HIGH
 
-        elif transaction.transaction_type == TransactionType.TRANSFER:
+        if transaction.amount > 300_000:
+            return RiskLevel.MEDIUM
+
+        if len(recent_operations) > 5:
+            return RiskLevel.MEDIUM
+
+        if transaction.transaction_type == TransactionType.TRANSFER:
             previous_receivers = {
                 operation.receiver_account_id
                 for operation in history
@@ -35,17 +49,8 @@ class RiskAnalyzer:
 
             if transaction.receiver_account_id not in previous_receivers:
                 return RiskLevel.MEDIUM
-            else:
-                return RiskLevel.LOW
 
-        elif transaction.amount > 300_000:
-            return RiskLevel.MEDIUM
-
-        elif len(recent_operations) > 5:
-            return RiskLevel.MEDIUM
-
-        else:
-            return RiskLevel.LOW
+        return RiskLevel.LOW
 
     def get_client_risk(self, client_id: str) -> RiskLevel:
         history = self.bank.transaction_history.get(client_id, [])

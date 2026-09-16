@@ -30,7 +30,7 @@ class FileLogger(TransactionLogger):
 
     def __init__(self, filename: str = "transactions.log"):
         self.logger = app_logging.getLogger(__name__)
-        self.logger.setLevel(logging.INFO)
+        self.logger.setLevel(app_logging.INFO)
         handler = app_logging.FileHandler(filename)
         formatter = app_logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)

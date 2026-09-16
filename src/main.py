@@ -28,13 +28,14 @@ def create_demo_bank() -> Bank:
         clients.append(client)
 
     # По 2 счета каждому клиенту = 10 счетов
-    for client in clients:
-        for _ in range(2):
-            bank.open_account(
-                client_id=client.client_id,
-                account_type=PremiumAccount,
-                currency=Currency.RUB
-            )
+        for client in clients:
+            for _ in range(2):
+                bank.open_account(
+                    client_id=client.client_id,
+                    pin=client.pin,
+                    account_type=PremiumAccount,
+                    currency=Currency.RUB
+                )
 
     return bank
 

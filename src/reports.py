@@ -1,15 +1,27 @@
 import json
 import csv
 import matplotlib.pyplot as plt
+from currency import CurrencyConverter
+from enums import Currency
 
 from bank import Bank
 
 
 class ReportBuilder:
-
     def __init__(self, bank: Bank):
         self.bank = bank
 
+    def _get_balance_in_currency(
+        self,
+        account,
+        target_currency: Currency
+    ) -> float:
+        return CurrencyConverter.convert(
+            account.balance,
+            account.currency,
+            target_currency
+        )
+    
     def generate_client_report(self, client_id: str) -> str:
         client = self.bank.clients.get(client_id)
 
@@ -19,7 +31,10 @@ class ReportBuilder:
         accounts = client.accounts
 
         total_balance = sum(
-            self.bank.accounts[account_id].balance
+            self._get_balance_in_currency(
+                self.bank.accounts[account_id],
+                Currency.RUB
+            )
             for account_id in accounts
         )
 
@@ -38,7 +53,13 @@ class ReportBuilder:
 
         total_clients = len(self.bank.clients)
         total_accounts = len(self.bank.accounts)
-        total_balance = self.bank.get_total_balance()
+        total_balance = sum(
+            self._get_balance_in_currency(
+                account,
+                Currency.RUB
+            )
+            for account in self.bank.accounts.values()
+        )
 
         report.append(f"Total clients: {total_clients}")
         report.append(f"Total accounts: {total_accounts}")
@@ -50,7 +71,10 @@ class ReportBuilder:
         for client in self.bank.clients.values():
 
             client_balance = sum(
-                self.bank.accounts[account_id].balance
+                self._get_balance_in_currency(
+                    self.bank.accounts[account_id],
+                    Currency.RUB
+                )
                 for account_id in client.accounts
             )
 
@@ -92,17 +116,28 @@ class ReportBuilder:
         return "\n".join(report)
 
     def export_bank_report_json(self, filename: str) -> None:
+        total_balance = sum(
+            self._get_balance_in_currency(
+                account,
+                Currency.RUB
+            )
+            for account in self.bank.accounts.values()
+        )
+
         report = {
             "total_clients": len(self.bank.clients),
             "total_accounts": len(self.bank.accounts),
-            "total_balance": self.bank.get_total_balance(),
+            "total_balance": total_balance,
             "clients": []
         }
 
         for client in self.bank.clients.values():
 
             client_balance = sum(
-                self.bank.accounts[account_id].balance
+                self._get_balance_in_currency(
+                    self.bank.accounts[account_id],
+                    Currency.RUB
+                )
                 for account_id in client.accounts
             )
 
@@ -141,7 +176,10 @@ class ReportBuilder:
             for client in self.bank.clients.values():
 
                 client_balance = sum(
-                    self.bank.accounts[account_id].balance
+                    self._get_balance_in_currency(
+                        self.bank.accounts[account_id],
+                        Currency.RUB
+                    )
                     for account_id in client.accounts
                 )
 
@@ -183,13 +221,15 @@ class ReportBuilder:
 
         for client in self.bank.clients.values():
             balance = sum(
-                self.bank.accounts[account_id].balance
+                self._get_balance_in_currency(
+                    self.bank.accounts[account_id],
+                    Currency.RUB
+                )
                 for account_id in client.accounts
             )
 
             clients.append(client.client_id)
             balances.append(balance)
-
         plt.figure(figsize=(10, 6))
 
         plt.bar(clients, balances)
@@ -234,15 +274,21 @@ class ReportBuilder:
             if transaction.status.value != "completed":
                 continue
 
+            amount = CurrencyConverter.convert(
+                transaction.get_total_amount(),
+                transaction.currency,
+                Currency.RUB
+            )
+
             if transaction.transaction_type.value == "deposit":
-                balance += transaction.amount
+                balance += amount
 
             elif transaction.transaction_type.value in (
                 "withdrawal",
                 "transfer",
                 "external_transfer"
             ):
-                balance -= transaction.get_total_amount()
+                balance -= amount
 
             balances.append(balance)
 

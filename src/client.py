@@ -21,6 +21,7 @@ class Client:
         phone: str = "",
         email: str = "",
         status: AccountStatus = AccountStatus.ACTIVE,
+        pin: str = "1234",
     ):
         self.client_id = client_id or UUIDGenerator.generate()
         self.full_name = full_name
@@ -28,6 +29,7 @@ class Client:
         self.phone = phone
         self.email = email
         self.status = status
+        self.pin = pin
         self.accounts: list[str] = []  # UUID счетов
 
         self._validate_age()

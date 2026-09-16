@@ -51,8 +51,11 @@ class Bank:
 
     def authenticate_client(self, client_id: str, pin: str) -> bool:
         now_hour = datetime.now().hour
+
         if 0 <= now_hour < 5:
-            raise InvalidOperationError("Operations forbidden from 00:00 to 05:00")
+            raise InvalidOperationError(
+                "Operations forbidden from 00:00 to 05:00"
+            )
 
         if client_id not in self.clients:
             return False
@@ -61,16 +64,31 @@ class Bank:
             self.suspicious_actions.add(client_id)
             return False
 
+        client = self.clients[client_id]
+
+        if pin != client.pin:
+            self.failed_attempts[client_id] = (
+                self.failed_attempts.get(client_id, 0) + 1
+            )
+
+            if self.failed_attempts[client_id] >= 3:
+                self.suspicious_actions.add(client_id)
+
+            return False
+
+        self.failed_attempts[client_id] = 0
+
         return True
 
     def open_account(
         self,
         client_id: str,
+        pin: str,
         account_type: type[AbstractAccount],
         currency: Currency,
         **kwargs,
     ) -> str:
-        if not self.authenticate_client(client_id, "1234"):
+        if not self.authenticate_client(client_id, pin):
             raise AccountClosedError("Authentication failed")
 
         client = self.clients[client_id]
@@ -91,8 +109,13 @@ class Bank:
         self.account_to_client[account_uuid] = client_id
         return account_uuid
 
-    def close_account(self, account_uuid: str, client_id: str) -> None:
-        if not self.authenticate_client(client_id, "1234"):
+    def close_account(
+        self,
+        account_uuid: str,
+        client_id: str,
+        pin: str,
+    ) -> None:
+        if not self.authenticate_client(client_id, pin):
             raise AccountClosedError("Authentication failed")
         if account_uuid not in self.accounts:
             raise InvalidOperationError("Account not found")
@@ -133,16 +156,27 @@ class Bank:
             )
             ranking.append({"client": client.full_name, "total": total})
         return sorted(ranking, key=lambda x: x["total"], reverse=True)[:top_n]
-
+    
     def record_transaction(self, transaction: Transaction) -> None:
-        
-        if transaction.transaction_type == TransactionType.DEPOSIT: 
-            account_id = transaction.receiver_account_id
+        account_ids = []
+
+        if transaction.transaction_type == TransactionType.DEPOSIT:
+            account_ids.append(transaction.receiver_account_id)
+
+        elif transaction.transaction_type == TransactionType.TRANSFER:
+            account_ids.append(transaction.sender_account_id)
+            account_ids.append(transaction.receiver_account_id)
+
         else:
-            account_id = transaction.sender_account_id
-        client_id = self.account_to_client[account_id]
+            account_ids.append(transaction.sender_account_id)
 
-        if client_id not in self.transaction_history:
-            self.transaction_history[client_id] = []
+        for account_id in account_ids:
+            client_id = self.account_to_client.get(account_id)
 
-        self.transaction_history[client_id].append(transaction)
+            if client_id is None:
+                continue
+
+            if client_id not in self.transaction_history:
+                self.transaction_history[client_id] = []
+
+            self.transaction_history[client_id].append(transaction)
