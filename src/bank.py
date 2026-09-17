@@ -170,12 +170,17 @@ class Bank:
         else:
             account_ids.append(transaction.sender_account_id)
 
+        # Собираем уникальных клиентов
+        client_ids = set()
+
         for account_id in account_ids:
             client_id = self.account_to_client.get(account_id)
 
-            if client_id is None:
-                continue
+            if client_id is not None:
+                client_ids.add(client_id)
 
+        # Записываем транзакцию каждому клиенту только один раз
+        for client_id in client_ids:
             if client_id not in self.transaction_history:
                 self.transaction_history[client_id] = []
 

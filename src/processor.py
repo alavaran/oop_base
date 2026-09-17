@@ -108,6 +108,15 @@ class TransactionProcessor:
                 transaction.mark_completed()
                 self.bank.record_transaction(transaction)
 
+                self.audit_log.record(
+                    AuditEvent(
+                        transaction_id=transaction.transaction_id,
+                        risk_level=risk_level,
+                        message=f"Transaction completed: {transaction.status.value}",
+                        failure_reason=transaction.failure_reason
+                    )
+                )
+
                 print(
                     f"✅ Транзакция {transaction.transaction_id} "
                     f"выполнена успешно"
